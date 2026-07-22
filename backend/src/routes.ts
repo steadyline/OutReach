@@ -702,6 +702,21 @@ router.post(
   })
 );
 
+router.delete(
+  "/emails/:id",
+  asyncRoute(async (req, res) => {
+    const result = await query<{ id: string }>(
+      "DELETE FROM emails WHERE user_id = $1 AND id = $2 RETURNING id",
+      [userId(req), req.params.id]
+    );
+    if (!result.rows[0]) {
+      res.status(404).json({ error: "Email activity not found" });
+      return;
+    }
+    res.status(204).end();
+  })
+);
+
 router.get(
   "/stats",
   asyncRoute(async (req, res) => {

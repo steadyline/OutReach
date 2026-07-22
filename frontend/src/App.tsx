@@ -1,5 +1,6 @@
 import {
   Activity,
+  Ban,
   CalendarClock,
   Check,
   Clock,
@@ -52,6 +53,7 @@ type ActionKey =
   | "schedule"
   | "refresh"
   | "delete"
+  | "deleteEmail"
   | "logout"
   | "cancel"
   | "search";
@@ -141,6 +143,13 @@ function statusLabel(status: string) {
     return "scheduled";
   }
   return status.replace(/_/g, " ");
+}
+
+function userInitials(name: string | null, email: string) {
+  const source = (name || email.split("@")[0] || "User").trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  const initials = parts.length > 1 ? `${parts[0][0]}${parts[1][0]}` : source.slice(0, 2);
+  return initials.toUpperCase();
 }
 
 function templateToForm(template: Template): TemplateForm {
@@ -547,9 +556,7 @@ export function App() {
         <Toaster position="top-right" />
         <section className="login-panel">
           <div className="login-brand-row">
-            <div className="brand-mark">
-              <Mail size={26} />
-            </div>
+            <div className="brand-mark">R</div>
             <span>Reach</span>
           </div>
           <div className="login-copy">
@@ -624,6 +631,7 @@ export function App() {
   }
 
   const senderEmail = user.sender_email ?? user.email;
+  const accountInitials = userInitials(user.name, senderEmail);
   const currentMeta = viewMeta[view];
 
   return (
@@ -642,9 +650,7 @@ export function App() {
       />
       <aside className="sidebar">
         <div className="side-brand">
-          <span className="brand-icon">
-            <Mail size={22} />
-          </span>
+          <span className="brand-icon">R</span>
           <div>
             <strong>Reach</strong>
             <span>Outreach Console</span>
@@ -655,7 +661,7 @@ export function App() {
         {[
           ["candidates", "Candidates", Users],
           ["templates", "Templates", FileText],
-          ["queue", "Outbox", CalendarClock],
+          ["queue", "Outbox", Inbox],
           ["settings", "Settings", SettingsIcon]
         ].map(([key, label, Icon]) => (
           <button
@@ -671,7 +677,13 @@ export function App() {
       </nav>
 
         <div className="side-account">
-          <span className="account-avatar">{senderEmail.slice(0, 1).toUpperCase()}</span>
+          <span className="account-avatar">
+            {user.avatar_url ? (
+              <img src={user.avatar_url} alt="" referrerPolicy="no-referrer" />
+            ) : (
+              accountInitials
+            )}
+          </span>
           <div>
             <strong>{user.name ?? "Connected Gmail"}</strong>
             <span>{senderEmail}</span>
@@ -861,7 +873,7 @@ export function App() {
                     <th>Status</th>
                     <th>Opened</th>
                     <th>Last contact</th>
-                    <th aria-label="Actions"></th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1065,7 +1077,7 @@ export function App() {
                     <th>Scheduled</th>
                     <th>Sent</th>
                     <th>Opened</th>
-                    <th aria-label="Actions"></th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1090,9 +1102,9 @@ export function App() {
                       <td>{formatDate(email.scheduled_at)}</td>
                       <td>{formatDate(email.sent_at)}</td>
                       <td>{formatDate(email.opened_at)}</td>
-                      <td className="actions-cell">
+                      <td className="actions-cell activity-actions">
                         <IconButton
-                          title="Cancel"
+                          title={email.status === "queued" ? "Cancel send" : "Only scheduled emails can be cancelled"}
                           disabled={email.status !== "queued"}
                           onClick={() =>
                             run(async () => {
@@ -1105,7 +1117,28 @@ export function App() {
                             })
                           }
                         >
-                          <X size={15} />
+                          <Ban size={15} />
+                        </IconButton>
+                        <IconButton
+                          title="Delete activity"
+                          tone="danger"
+                          disabled={activeAction === "deleteEmail"}
+                          onClick={() =>
+                            run(async () => {
+                              await api.deleteEmail(email.id);
+                              await loadApp();
+                            }, {
+                              action: "deleteEmail",
+                              loading: "Deleting activity...",
+                              success: "Activity deleted"
+                            })
+                          }
+                        >
+                          {activeAction === "deleteEmail" ? (
+                            <RefreshCw className="spin" size={15} />
+                          ) : (
+                            <Trash2 size={15} />
+                          )}
                         </IconButton>
                       </td>
                     </tr>
@@ -1118,201 +1151,219 @@ export function App() {
       )}
 
       {view === "settings" && (
-        <section className="workspace">
+        <section className="workspace settings-workspace">
           <form className="settings-form" onSubmit={saveSettings}>
-            <section className="settings-section">
-              <div className="section-head">
+            <section className="settings-section settings-panel">
+              <div className="section-head settings-header">
                 <div>
-                  <p className="eyebrow">Schedule</p>
-                  <h2>Sending Window</h2>
+                  <p className="eyebrow">Controls</p>
+                  <h2>Delivery Rules</h2>
                 </div>
-                <CalendarClock size={18} />
-              </div>
-              <div className="settings-grid">
-                <label>
-                  Emails per day
-                  <input
-                    type="number"
-                    min={1}
-                    max={500}
-                    value={settings.dailyLimit}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        dailyLimit: Number(event.target.value)
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Start time
-                  <input
-                    type="time"
-                    value={settings.startTime}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, startTime: event.target.value }))
-                    }
-                  />
-                </label>
-                <label>
-                  End time
-                  <input
-                    type="time"
-                    value={settings.endTime}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, endTime: event.target.value }))
-                    }
-                  />
-                </label>
-                <label>
-                  Timezone
-                  <select
-                    value={settings.timezone}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, timezone: event.target.value }))
-                    }
-                  >
-                    {timezoneSelectOptions.map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label} - {value}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </section>
-
-            <section className="settings-section">
-              <div className="section-head">
-                <div>
-                  <p className="eyebrow">Pace</p>
-                  <h2>Delivery Guard</h2>
-                </div>
-                <Clock size={18} />
-              </div>
-              <div className="settings-grid">
-                <label>
-                  Minimum gap, minutes
-                  <input
-                    type="number"
-                    min={1}
-                    max={240}
-                    value={settings.minGapMinutes}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        minGapMinutes: Number(event.target.value)
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Maximum gap, minutes
-                  <input
-                    type="number"
-                    min={1}
-                    max={240}
-                    value={settings.maxGapMinutes}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        maxGapMinutes: Number(event.target.value)
-                      }))
-                    }
-                  />
-                </label>
-              </div>
-            </section>
-
-            <section className="settings-section">
-              <div className="section-head">
-                <div>
-                  <p className="eyebrow">Follow-ups</p>
-                  <h2>Sequence Rules</h2>
-                </div>
-                <RefreshCw size={18} />
-              </div>
-              <div className="settings-grid">
-                <label>
-                  First follow-up, days
-                  <input
-                    type="number"
-                    min={1}
-                    max={60}
-                    value={settings.followupAfterDays}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        followupAfterDays: Number(event.target.value)
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Final follow-up, days
-                  <input
-                    type="number"
-                    min={1}
-                    max={90}
-                    value={settings.secondFollowupAfterDays}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        secondFollowupAfterDays: Number(event.target.value)
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Maximum follow-ups
-                  <input
-                    type="number"
-                    min={0}
-                    max={5}
-                    value={settings.maxFollowups}
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        maxFollowups: Number(event.target.value)
-                      }))
-                    }
-                  />
-                </label>
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={settings.stopOnOpen}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, stopOnOpen: event.target.checked }))
-                    }
-                  />
-                  Stop after open
-                </label>
-              </div>
-            </section>
-
-            <section className="settings-section">
-              <div className="section-head">
-                <div>
-                  <p className="eyebrow">Sender</p>
-                  <h2>Identity</h2>
-                </div>
-                <Mail size={18} />
-              </div>
-              <div className="settings-grid">
-                <label>
-                  Sender display name
-                  <input
-                    value={settings.senderName ?? ""}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, senderName: event.target.value }))
-                    }
-                  />
-                </label>
                 <button className="primary-button save-settings" type="submit" disabled={busy}>
-                  <Save size={16} />
-                  Save Settings
+                  {activeAction === "settings" ? (
+                    <RefreshCw className="spin" size={16} />
+                  ) : (
+                    <Save size={16} />
+                  )}
+                  {activeAction === "settings" ? "Saving" : "Save Settings"}
                 </button>
+              </div>
+
+              <div className="settings-layout">
+                <div className="settings-block">
+                  <div className="settings-block-title">
+                    <CalendarClock size={17} />
+                    <div>
+                      <h3>Sending Window</h3>
+                      <p>Daily cap and local working hours.</p>
+                    </div>
+                  </div>
+                  <div className="settings-grid">
+                    <label>
+                      Emails per day
+                      <input
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={settings.dailyLimit}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            dailyLimit: Number(event.target.value)
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Start time
+                      <input
+                        type="time"
+                        value={settings.startTime}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, startTime: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      End time
+                      <input
+                        type="time"
+                        value={settings.endTime}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, endTime: event.target.value }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Timezone
+                      <select
+                        value={settings.timezone}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, timezone: event.target.value }))
+                        }
+                      >
+                        {timezoneSelectOptions.map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label} - {value}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="settings-block">
+                  <div className="settings-block-title">
+                    <Clock size={17} />
+                    <div>
+                      <h3>Delivery Guard</h3>
+                      <p>Randomized delay between sends.</p>
+                    </div>
+                  </div>
+                  <div className="settings-grid two">
+                    <label>
+                      Minimum gap, minutes
+                      <input
+                        type="number"
+                        min={1}
+                        max={240}
+                        value={settings.minGapMinutes}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            minGapMinutes: Number(event.target.value)
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Maximum gap, minutes
+                      <input
+                        type="number"
+                        min={1}
+                        max={240}
+                        value={settings.maxGapMinutes}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            maxGapMinutes: Number(event.target.value)
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="settings-block">
+                  <div className="settings-block-title">
+                    <RefreshCw size={17} />
+                    <div>
+                      <h3>Follow-ups</h3>
+                      <p>Retry only when the candidate has not opened.</p>
+                    </div>
+                  </div>
+                  <div className="settings-grid">
+                    <label>
+                      First follow-up, days
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={settings.followupAfterDays}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            followupAfterDays: Number(event.target.value)
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Final follow-up, days
+                      <input
+                        type="number"
+                        min={1}
+                        max={90}
+                        value={settings.secondFollowupAfterDays}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            secondFollowupAfterDays: Number(event.target.value)
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Maximum follow-ups
+                      <input
+                        type="number"
+                        min={0}
+                        max={5}
+                        value={settings.maxFollowups}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            maxFollowups: Number(event.target.value)
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={settings.stopOnOpen}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            stopOnOpen: event.target.checked
+                          }))
+                        }
+                      />
+                      Stop after open
+                    </label>
+                  </div>
+                </div>
+
+                <div className="settings-block">
+                  <div className="settings-block-title">
+                    <Mail size={17} />
+                    <div>
+                      <h3>Sender Identity</h3>
+                      <p>Optional display name for outgoing mail.</p>
+                    </div>
+                  </div>
+                  <div className="settings-grid two">
+                    <label>
+                      Sender display name
+                      <input
+                        value={settings.senderName ?? ""}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, senderName: event.target.value }))
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
               </div>
             </section>
           </form>

@@ -78,5 +78,6 @@ export const api = {
     }),
   emails: () => request<EmailLog[]>("/emails"),
   cancelEmail: (id: string) => request<EmailLog>(`/emails/${id}/cancel`, { method: "POST" }),
+  deleteEmail: (id: string) => request<void>(`/emails/${id}`, { method: "DELETE" }),
   stats: () => request<Stats>("/stats")
 };
