@@ -61,7 +61,7 @@ Use a Google Cloud OAuth web client and request these scopes:
 Backend build command:
 
 ```bash
-npm install && npm run build
+npm install --include=dev && npm run build
 ```
 
 Backend start command:
@@ -71,6 +71,8 @@ npm run migrate:prod && npm start
 ```
 
 Set the root directory to `backend` if deploying only the backend service from the monorepo.
+
+Do not set `NODE_ENV=production` as a Render environment variable before the build. If it is set during install, Render may skip build-time dev dependencies like TypeScript and `@types/node`.
 
 ## Vercel
 
