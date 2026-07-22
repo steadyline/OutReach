@@ -24,6 +24,7 @@ const corsOrigins = (process.env.CORS_ORIGINS ?? frontendUrl)
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: required("DATABASE_URL"),
+  databasePoolMax: Number(process.env.DATABASE_POOL_MAX ?? 5),
   googleClientId: required("GOOGLE_CLIENT_ID"),
   googleClientSecret: required("GOOGLE_CLIENT_SECRET"),
   googleRedirectUri:
@@ -39,4 +40,3 @@ export const config = {
   corsOrigins,
   isProduction: process.env.NODE_ENV === "production"
 };
-
