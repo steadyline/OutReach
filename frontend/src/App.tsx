@@ -152,6 +152,21 @@ function userInitials(name: string | null, email: string) {
   return initials.toUpperCase();
 }
 
+function timezoneGmtOffset(timezone: string) {
+  try {
+    const timeZoneName = "longOffset" as Intl.DateTimeFormatOptions["timeZoneName"];
+    const parts = new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: timezone,
+      timeZoneName
+    }).formatToParts(new Date());
+    return parts.find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+  } catch {
+    return "GMT";
+  }
+}
+
 function templateToForm(template: Template): TemplateForm {
   return {
     name: template.name,
@@ -308,8 +323,16 @@ export function App() {
     if (currentTimezone && !options.some(([value]) => value === currentTimezone)) {
       options.unshift([currentTimezone, currentTimezone]);
     }
-    return options;
+    return options.map(([value, label]) => ({
+      value,
+      label,
+      offset: timezoneGmtOffset(value)
+    }));
   }, [settings.timezone]);
+  const currentTimezoneOffset = useMemo(
+    () => timezoneGmtOffset(settings.timezone),
+    [settings.timezone]
+  );
 
   const emailStats = useMemo(
     () => [
@@ -1215,16 +1238,16 @@ export function App() {
                       />
                     </label>
                     <label>
-                      Timezone
+                      Timezone ({currentTimezoneOffset})
                       <select
                         value={settings.timezone}
                         onChange={(event) =>
                           setSettings((current) => ({ ...current, timezone: event.target.value }))
                         }
                       >
-                        {timezoneSelectOptions.map(([value, label]) => (
+                        {timezoneSelectOptions.map(({ value, label, offset }) => (
                           <option key={value} value={value}>
-                            {label} - {value}
+                            {label} ({offset}) - {value}
                           </option>
                         ))}
                       </select>

@@ -200,6 +200,21 @@ button:disabled {
     color 140ms ease;
 }
 
+.primary-link svg,
+.primary-button svg,
+.ghost-button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex: 0 0 auto;
+  color: currentColor;
+  stroke: currentColor;
+}
+
+.primary-button .spin {
+  color: #ffffff;
+}
+
 .primary-link,
 .primary-button {
   color: #ffffff;
@@ -386,9 +401,9 @@ button:disabled {
 }
 
 .side-brand strong,
-.side-brand span,
+.side-brand > div > span,
 .side-account strong,
-.side-account span {
+.side-account > div > span {
   display: block;
 }
 
@@ -398,7 +413,7 @@ button:disabled {
   line-height: 1.1;
 }
 
-.side-brand span {
+.side-brand > div > span {
   margin-top: 3px;
   color: var(--muted);
   font-size: 12px;
@@ -841,6 +856,7 @@ td strong {
 
 .activity-actions {
   min-width: 84px;
+  border-bottom-color: transparent;
 }
 
 .icon-button {
