@@ -1,8 +1,12 @@
 import {
+  Activity,
+  CalendarClock,
   Check,
   Clock,
   Edit3,
   Eye,
+  FileText,
+  Inbox,
   LogOut,
   Mail,
   Plus,
@@ -11,11 +15,14 @@ import {
   Search,
   Send,
   Settings as SettingsIcon,
+  ShieldCheck,
   Trash2,
+  UserPlus,
+  Users,
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { API_URL, api } from "./api";
+import { api } from "./api";
 import type { Candidate, EmailLog, Settings, Stats, Template, User } from "./types";
 
 type View = "candidates" | "templates" | "queue" | "settings";
@@ -74,6 +81,25 @@ const timezones =
         "Europe/Berlin",
         "Asia/Tokyo"
       ];
+
+const viewMeta: Record<View, { eyebrow: string; title: string }> = {
+  candidates: {
+    eyebrow: "People",
+    title: "Candidate Pipeline"
+  },
+  templates: {
+    eyebrow: "Messaging",
+    title: "Email Templates"
+  },
+  queue: {
+    eyebrow: "Delivery",
+    title: "Send Queue"
+  },
+  settings: {
+    eyebrow: "Controls",
+    title: "Delivery Settings"
+  }
+};
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -146,10 +172,10 @@ export function App() {
 
   const emailStats = useMemo(
     () => [
-      { label: "Queued", value: stats.emails.queued ?? 0, icon: Clock },
-      { label: "Sent", value: stats.emails.sent ?? 0, icon: Send },
-      { label: "Opened", value: stats.emails.opened ?? 0, icon: Eye },
-      { label: "Failed", value: stats.emails.failed ?? 0, icon: X }
+      { label: "Queued", value: stats.emails.queued ?? 0, icon: Clock, tone: "queued" },
+      { label: "Sent", value: stats.emails.sent ?? 0, icon: Send, tone: "sent" },
+      { label: "Opened", value: stats.emails.opened ?? 0, icon: Eye, tone: "opened" },
+      { label: "Failed", value: stats.emails.failed ?? 0, icon: X, tone: "failed" }
     ],
     [stats]
   );
@@ -331,20 +357,85 @@ export function App() {
     return (
       <main className="login-shell">
         <section className="login-panel">
-          <div className="brand-mark">
-            <Mail size={28} />
+          <div className="login-brand-row">
+            <div className="brand-mark">
+              <Mail size={26} />
+            </div>
+            <span>Reach</span>
           </div>
-          <h1>Reach</h1>
-          <a className="primary-link" href={api.authUrl}>
+          <div className="login-copy">
+            <p className="eyebrow">Outreach workspace</p>
+            <h1>Sign in to Reach</h1>
+            <p>Connect Gmail to manage candidates, templates, tracking, and delivery windows.</p>
+          </div>
+          <a className="primary-link login-cta" href={api.authUrl}>
             <Mail size={18} />
-            Connect Gmail
+            Continue with Gmail
           </a>
           {error && <p className="error-text">{error}</p>}
-          <p className="login-meta">API target: {API_URL}</p>
+        </section>
+        <section className="login-preview" aria-hidden="true">
+          <div className="preview-topline">
+            <span className="status-light" />
+            <span>Delivery guard ready</span>
+          </div>
+          <div className="preview-window">
+            <div className="preview-bar">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="preview-grid">
+              <div>
+                <Users size={18} />
+                <strong>128</strong>
+                <span>Candidates</span>
+              </div>
+              <div>
+                <Inbox size={18} />
+                <strong>60</strong>
+                <span>Daily cap</span>
+              </div>
+              <div>
+                <Activity size={18} />
+                <strong>42%</strong>
+                <span>Open rate</span>
+              </div>
+            </div>
+            <div className="preview-list">
+              <div>
+                <span className="avatar-chip">AM</span>
+                <div>
+                  <strong>Amanda Morgan</strong>
+                  <span>Follow-up queued</span>
+                </div>
+                <Clock size={16} />
+              </div>
+              <div>
+                <span className="avatar-chip green">JL</span>
+                <div>
+                  <strong>Jon Lee</strong>
+                  <span>Opened today</span>
+                </div>
+                <Eye size={16} />
+              </div>
+              <div>
+                <span className="avatar-chip blue">KP</span>
+                <div>
+                  <strong>Kira Patel</strong>
+                  <span>Initial sent</span>
+                </div>
+                <Check size={16} />
+              </div>
+            </div>
+          </div>
         </section>
       </main>
     );
   }
+
+  const senderEmail = user.sender_email ?? user.email;
+  const currentMeta = viewMeta[view];
 
   return (
     <main className="app-shell">
@@ -354,11 +445,18 @@ export function App() {
             <Mail size={22} />
           </span>
           <div>
+            <span className="eyebrow">Outreach Console</span>
             <h1>Reach</h1>
-            <p>{user.sender_email ?? user.email}</p>
           </div>
         </div>
         <div className="top-actions">
+          <div className="account-summary">
+            <span className="account-avatar">{senderEmail.slice(0, 1).toUpperCase()}</span>
+            <div>
+              <strong>{user.name ?? "Connected Gmail"}</strong>
+              <span>{senderEmail}</span>
+            </div>
+          </div>
           <button type="button" className="ghost-button" onClick={() => run(() => loadApp())}>
             <RefreshCw size={16} />
             Refresh
@@ -372,7 +470,7 @@ export function App() {
 
       <section className="stats-strip">
         {emailStats.map((item) => (
-          <div className="stat" key={item.label}>
+          <div className={`stat ${item.tone}`} key={item.label}>
             <item.icon size={18} />
             <span>{item.label}</span>
             <strong>{item.value}</strong>
@@ -394,11 +492,22 @@ export function App() {
         </section>
       )}
 
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">{currentMeta.eyebrow}</p>
+          <h2>{currentMeta.title}</h2>
+        </div>
+        <span className="connection-pill">
+          <ShieldCheck size={15} />
+          Gmail connected
+        </span>
+      </section>
+
       <nav className="tabs" aria-label="Workspace">
         {[
-          ["candidates", "Candidates", Mail],
-          ["templates", "Templates", Edit3],
-          ["queue", "Queue", Send],
+          ["candidates", "Candidates", Users],
+          ["templates", "Templates", FileText],
+          ["queue", "Queue", CalendarClock],
           ["settings", "Settings", SettingsIcon]
         ].map(([key, label, Icon]) => (
           <button
@@ -416,11 +525,18 @@ export function App() {
       {view === "candidates" && (
         <section className="workspace two-column">
           <form className="form-panel" onSubmit={submitCandidate}>
-            <h2>{editingCandidateId ? "Edit Candidate" : "Add Candidate"}</h2>
+            <div className="section-head">
+              <div>
+                <p className="eyebrow">Record</p>
+                <h2>{editingCandidateId ? "Edit Candidate" : "Add Candidate"}</h2>
+              </div>
+              <UserPlus size={18} />
+            </div>
             <label>
               Name
               <input
                 value={candidateForm.name}
+                placeholder="Ava Johnson"
                 onChange={(event) =>
                   setCandidateForm((current) => ({ ...current, name: event.target.value }))
                 }
@@ -432,6 +548,7 @@ export function App() {
               <input
                 type="email"
                 value={candidateForm.email}
+                placeholder="ava@company.com"
                 onChange={(event) =>
                   setCandidateForm((current) => ({ ...current, email: event.target.value }))
                 }
@@ -442,6 +559,7 @@ export function App() {
               Location
               <input
                 value={candidateForm.location}
+                placeholder="New York"
                 onChange={(event) =>
                   setCandidateForm((current) => ({ ...current, location: event.target.value }))
                 }
@@ -503,6 +621,13 @@ export function App() {
                   </tr>
                 </thead>
                 <tbody>
+                  {candidates.length === 0 && (
+                    <tr>
+                      <td className="empty-row" colSpan={8}>
+                        No candidates found
+                      </td>
+                    </tr>
+                  )}
                   {candidates.map((candidate) => (
                     <tr key={candidate.id}>
                       <td>
@@ -557,11 +682,18 @@ export function App() {
       {view === "templates" && (
         <section className="workspace two-column">
           <form className="form-panel wide-form" onSubmit={submitTemplate}>
-            <h2>{editingTemplateId ? "Edit Template" : "New Template"}</h2>
+            <div className="section-head">
+              <div>
+                <p className="eyebrow">Message</p>
+                <h2>{editingTemplateId ? "Edit Template" : "New Template"}</h2>
+              </div>
+              <FileText size={18} />
+            </div>
             <label>
               Name
               <input
                 value={templateForm.name}
+                placeholder="Senior engineer outreach"
                 onChange={(event) =>
                   setTemplateForm((current) => ({ ...current, name: event.target.value }))
                 }
@@ -572,6 +704,7 @@ export function App() {
               Subject
               <input
                 value={templateForm.subject}
+                placeholder="Quick question, {{first_name}}"
                 onChange={(event) =>
                   setTemplateForm((current) => ({ ...current, subject: event.target.value }))
                 }
@@ -583,6 +716,7 @@ export function App() {
               <textarea
                 rows={9}
                 value={templateForm.bodyText}
+                placeholder="Hi {{first_name}},"
                 onChange={(event) =>
                   setTemplateForm((current) => ({ ...current, bodyText: event.target.value }))
                 }
@@ -636,8 +770,15 @@ export function App() {
           </form>
 
           <section className="list-panel">
-            <h2>Templates</h2>
+            <div className="section-head">
+              <div>
+                <p className="eyebrow">Library</p>
+                <h2>Templates</h2>
+              </div>
+              <span className="count-badge">{templates.length}</span>
+            </div>
             <div className="template-list">
+              {templates.length === 0 && <div className="empty-state">No templates yet</div>}
               {templates.map((template) => (
                 <article className="template-row" key={template.id}>
                   <div>
@@ -725,6 +866,13 @@ export function App() {
                   </tr>
                 </thead>
                 <tbody>
+                  {emails.length === 0 && (
+                    <tr>
+                      <td className="empty-row" colSpan={8}>
+                        No email activity yet
+                      </td>
+                    </tr>
+                  )}
                   {emails.map((email) => (
                     <tr key={email.id}>
                       <td>

@@ -36,13 +36,19 @@ Optional:
 
 Create a Supabase project, then open the project dashboard and click **Connect**.
 
-For the Render backend, use the **Session Pooler** connection string as `DATABASE_URL`. This is the best fit for a long-lived Node/Express service. Supabase documents Transaction Pooler mode as useful for serverless/edge workloads, while Session Pooler or direct connections are better for long-lived application servers. Source: https://supabase.com/docs/guides/database/connecting-to-postgres
+For the Render backend, use the **Session Pooler** connection string as `DATABASE_URL`. This is the best fit for a long-lived Node/Express service. Supabase direct database URLs can resolve to IPv6, and some hosts cannot reach them, causing errors like `ENETUNREACH ... :5432`. Supabase recommends Supavisor/session mode when IPv6 is not available. Source: https://supabase.com/docs/guides/database/connecting-to-postgres
 
 Use the connection string in Render like:
 
 ```env
 DATABASE_URL=postgres://postgres.your-project-ref:your-password@aws-0-your-region.pooler.supabase.com:5432/postgres
 DATABASE_POOL_MAX=5
+```
+
+Do not use this direct connection form on Render unless your service can reach IPv6 or you pay for Supabase's IPv4 add-on:
+
+```env
+DATABASE_URL=postgresql://postgres:your-password@db.your-project-ref.supabase.co:5432/postgres
 ```
 
 Do not put Supabase service-role keys in the frontend. This app connects to Supabase only from the backend using the Postgres connection string.
