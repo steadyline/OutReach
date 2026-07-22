@@ -71,7 +71,6 @@ export const api = {
       followupBodyText: string | null;
     }>
   ) => request<Template>(`/templates/${id}`, { method: "PATCH", body: JSON.stringify(template) }),
-  deleteTemplate: (id: string) => request<void>(`/templates/${id}`, { method: "DELETE" }),
   queueCampaign: (body: { templateId: string; candidateIds?: string[] }) =>
     request<{ queued: number; skipped: number }>("/campaigns/queue", {
       method: "POST",

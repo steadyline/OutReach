@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import Papa from "papaparse";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import toast, { Toaster } from "react-hot-toast";
 import { api } from "./api";
 import type { Candidate, EmailLog, Settings, Stats, Template, User } from "./types";
 
@@ -42,6 +43,18 @@ type TemplateForm = {
   followupSubject: string;
   followupBodyText: string;
 };
+
+type ActionKey =
+  | "candidate"
+  | "import"
+  | "template"
+  | "settings"
+  | "schedule"
+  | "refresh"
+  | "delete"
+  | "logout"
+  | "cancel"
+  | "search";
 
 const emptyCandidate: CandidateForm = { name: "", email: "", location: "" };
 const emptyTemplate: TemplateForm = {
@@ -128,6 +141,16 @@ function statusLabel(status: string) {
     return "scheduled";
   }
   return status.replace(/_/g, " ");
+}
+
+function templateToForm(template: Template): TemplateForm {
+  return {
+    name: template.name,
+    subject: template.subject,
+    bodyText: template.body_text,
+    followupSubject: template.followup_subject ?? "",
+    followupBodyText: template.followup_body_text ?? ""
+  };
 }
 
 type CandidateCsvRow = Record<string, unknown>;
@@ -248,13 +271,11 @@ function IconButton({
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [activeAction, setActiveAction] = useState<ActionKey | null>(null);
   const [view, setView] = useState<View>("candidates");
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
+  const [authError, setAuthError] = useState("");
 
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [templates, setTemplates] = useState<Template[]>([]);
   const [emails, setEmails] = useState<EmailLog[]>([]);
   const [settings, setSettings] = useState<Settings>(fallbackSettings);
   const [stats, setStats] = useState<Stats>({ emails: {}, candidates: {} });
@@ -269,6 +290,7 @@ export function App() {
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const csvInputRef = useRef<HTMLInputElement>(null);
 
+  const busy = activeAction !== null;
   const selectedCount = selectedCandidateIds.size;
   const activeCount = stats.candidates.active ?? 0;
   const timezoneSelectOptions = useMemo(() => {
@@ -299,11 +321,13 @@ export function App() {
       api.stats()
     ]);
     setCandidates(candidateData);
-    setTemplates(templateData);
     setEmails(emailData);
     setSettings(settingsData);
     setStats(statsData);
-    setSelectedTemplateId((current) => current || templateData[0]?.id || "");
+    const primaryTemplate = templateData[0];
+    setSelectedTemplateId(primaryTemplate?.id ?? "");
+    setEditingTemplateId(primaryTemplate?.id ?? null);
+    setTemplateForm(primaryTemplate ? templateToForm(primaryTemplate) : emptyTemplate);
   }
 
   async function refreshAuth() {
@@ -315,7 +339,7 @@ export function App() {
         await loadApp("");
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not load session");
+      setAuthError(caught instanceof Error ? caught.message : "Could not load session");
     } finally {
       setLoading(false);
     }
@@ -325,19 +349,37 @@ export function App() {
     void refreshAuth();
   }, []);
 
-  async function run(action: () => Promise<void>, success?: string) {
-    setBusy(true);
-    setError("");
-    setNotice("");
+  async function run<T>(
+    action: () => Promise<T>,
+    options: {
+      action?: ActionKey;
+      loading?: string;
+      success?: string | ((result: T) => string);
+    } = {}
+  ) {
+    const toastId = options.loading ? toast.loading(options.loading) : undefined;
+    setActiveAction(options.action ?? "refresh");
     try {
-      await action();
-      if (success) {
-        setNotice(success);
+      const result = await action();
+      if (options.success) {
+        toast.success(
+          typeof options.success === "function" ? options.success(result) : options.success,
+          { id: toastId }
+        );
+      } else if (toastId) {
+        toast.dismiss(toastId);
       }
+      return result;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Something went wrong");
+      const message = caught instanceof Error ? caught.message : "Something went wrong";
+      if (toastId) {
+        toast.error(message, { id: toastId });
+      } else {
+        toast.error(message);
+      }
+      return undefined;
     } finally {
-      setBusy(false);
+      setActiveAction(null);
     }
   }
 
@@ -360,7 +402,11 @@ export function App() {
       setCandidateForm(emptyCandidate);
       setEditingCandidateId(null);
       await loadApp();
-    }, editingCandidateId ? "Candidate saved" : "Candidate added");
+    }, {
+      action: "candidate",
+      loading: editingCandidateId ? "Saving candidate..." : "Adding candidate...",
+      success: editingCandidateId ? "Candidate saved" : "Candidate added"
+    });
   }
 
   async function handleCandidateCsvImport(event: ChangeEvent<HTMLInputElement>) {
@@ -374,9 +420,12 @@ export function App() {
       const rows = await parseCandidateCsv(file);
       const result = await api.importCandidates(rows);
       await loadApp();
-      setNotice(
-        `Imported ${result.imported} candidates: ${result.created} added, ${result.updated} updated, ${result.skipped} duplicate rows skipped`
-      );
+      return result;
+    }, {
+      action: "import",
+      loading: "Importing CSV...",
+      success: (result) =>
+        `Imported ${result.imported}: ${result.created} added, ${result.updated} updated, ${result.skipped} duplicate rows skipped`
     });
   }
 
@@ -390,15 +439,21 @@ export function App() {
         followupSubject: templateForm.followupSubject || null,
         followupBodyText: templateForm.followupBodyText || null
       };
+      let savedTemplate: Template;
       if (editingTemplateId) {
-        await api.updateTemplate(editingTemplateId, payload);
+        savedTemplate = await api.updateTemplate(editingTemplateId, payload);
       } else {
-        await api.createTemplate(payload);
+        savedTemplate = await api.createTemplate(payload);
       }
-      setTemplateForm(emptyTemplate);
-      setEditingTemplateId(null);
+      setEditingTemplateId(savedTemplate.id);
+      setSelectedTemplateId(savedTemplate.id);
+      setTemplateForm(templateToForm(savedTemplate));
       await loadApp();
-    }, editingTemplateId ? "Template saved" : "Template added");
+    }, {
+      action: "template",
+      loading: "Saving template...",
+      success: "Template saved"
+    });
   }
 
   async function saveSettings(event: FormEvent) {
@@ -406,10 +461,19 @@ export function App() {
     await run(async () => {
       await api.saveSettings(settings);
       await loadApp();
-    }, "Settings saved");
+    }, {
+      action: "settings",
+      loading: "Saving settings...",
+      success: "Settings saved"
+    });
   }
 
   async function queueCampaign(useSelection: boolean) {
+    if (!selectedTemplateId) {
+      toast.error("Create the primary template before scheduling emails");
+      return;
+    }
+
     await run(async () => {
       const result = await api.queueCampaign({
         templateId: selectedTemplateId,
@@ -417,7 +481,11 @@ export function App() {
       });
       await loadApp();
       setView("queue");
-      setNotice(`${result.queued} queued, ${result.skipped} skipped`);
+      return result;
+    }, {
+      action: "schedule",
+      loading: useSelection ? "Scheduling selected candidates..." : "Scheduling active candidates...",
+      success: (result) => `${result.queued} scheduled, ${result.skipped} skipped`
     });
   }
 
@@ -429,18 +497,6 @@ export function App() {
       location: candidate.location ?? ""
     });
     setView("candidates");
-  }
-
-  function editTemplate(template: Template) {
-    setEditingTemplateId(template.id);
-    setTemplateForm({
-      name: template.name,
-      subject: template.subject,
-      bodyText: template.body_text,
-      followupSubject: template.followup_subject ?? "",
-      followupBodyText: template.followup_body_text ?? ""
-    });
-    setView("templates");
   }
 
   function toggleCandidate(id: string) {
@@ -459,6 +515,8 @@ export function App() {
     event.preventDefault();
     await run(async () => {
       await loadApp(search);
+    }, {
+      action: "search"
     });
   }
 
@@ -467,14 +525,17 @@ export function App() {
       await api.logout();
       setUser(null);
       setCandidates([]);
-      setTemplates([]);
       setEmails([]);
+    }, {
+      action: "logout",
+      loading: "Signing out..."
     });
   }
 
   if (loading) {
     return (
       <main className="boot">
+        <Toaster position="top-right" />
         <RefreshCw className="spin" size={24} />
       </main>
     );
@@ -483,6 +544,7 @@ export function App() {
   if (!user) {
     return (
       <main className="login-shell">
+        <Toaster position="top-right" />
         <section className="login-panel">
           <div className="login-brand-row">
             <div className="brand-mark">
@@ -499,7 +561,7 @@ export function App() {
             <Mail size={18} />
             Continue with Gmail
           </a>
-          {error && <p className="error-text">{error}</p>}
+          {authError && <p className="error-text">{authError}</p>}
         </section>
         <section className="login-preview" aria-hidden="true">
           <div className="preview-topline">
@@ -566,6 +628,18 @@ export function App() {
 
   return (
     <main className="product-shell">
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 3500,
+          style: {
+            border: "1px solid #e4e7ec",
+            boxShadow: "0 8px 24px rgba(16, 24, 40, 0.08)",
+            color: "#101828",
+            fontSize: "13px"
+          }
+        }}
+      />
       <aside className="sidebar">
         <div className="side-brand">
           <span className="brand-icon">
@@ -616,9 +690,18 @@ export function App() {
               <ShieldCheck size={15} />
               Gmail connected
             </span>
-            <button type="button" className="ghost-button" onClick={() => run(() => loadApp())}>
-              <RefreshCw size={16} />
-              Refresh
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() =>
+                run(() => loadApp(), {
+                  action: "refresh"
+                })
+              }
+              disabled={activeAction === "refresh"}
+            >
+              <RefreshCw className={activeAction === "refresh" ? "spin" : ""} size={16} />
+              {activeAction === "refresh" ? "Refreshing" : "Refresh"}
             </button>
             <button type="button" className="ghost-button" onClick={logout}>
               <LogOut size={16} />
@@ -641,15 +724,6 @@ export function App() {
             <Check size={18} />
           </div>
         </section>
-
-        {(notice || error) && (
-          <section className={`notice ${error ? "error" : ""}`}>
-            <span>{error || notice}</span>
-            <button type="button" onClick={() => (error ? setError("") : setNotice(""))}>
-              <X size={16} />
-            </button>
-          </section>
-        )}
 
       {view === "candidates" && (
         <section className="workspace two-column">
@@ -696,8 +770,18 @@ export function App() {
             </label>
             <div className="button-row">
               <button className="primary-button" type="submit" disabled={busy}>
-                <Save size={16} />
-                {editingCandidateId ? "Save" : "Add"}
+                {activeAction === "candidate" ? (
+                  <RefreshCw className="spin" size={16} />
+                ) : (
+                  <Save size={16} />
+                )}
+                {activeAction === "candidate"
+                  ? editingCandidateId
+                    ? "Saving"
+                    : "Adding"
+                  : editingCandidateId
+                    ? "Save"
+                    : "Add"}
               </button>
               {editingCandidateId && (
                 <button
@@ -732,8 +816,12 @@ export function App() {
                 disabled={busy}
                 onClick={() => csvInputRef.current?.click()}
               >
-                <Upload size={16} />
-                Import CSV
+                {activeAction === "import" ? (
+                  <RefreshCw className="spin" size={16} />
+                ) : (
+                  <Upload size={16} />
+                )}
+                {activeAction === "import" ? "Importing" : "Import CSV"}
               </button>
             </div>
           </form>
@@ -754,8 +842,12 @@ export function App() {
                 onClick={() => queueCampaign(true)}
                 disabled={!selectedTemplateId || selectedCount === 0 || busy}
               >
-                <Send size={16} />
-                Schedule {selectedCount || ""}
+                {activeAction === "schedule" ? (
+                  <RefreshCw className="spin" size={16} />
+                ) : (
+                  <Send size={16} />
+                )}
+                {activeAction === "schedule" ? "Scheduling" : `Schedule ${selectedCount || ""}`}
               </button>
             </div>
             <div className="table-wrap">
@@ -816,7 +908,11 @@ export function App() {
                                 return next;
                               });
                               await loadApp();
-                            }, "Candidate deleted")
+                            }, {
+                              action: "delete",
+                              loading: "Deleting candidate...",
+                              success: "Candidate deleted"
+                            })
                           }
                         >
                           <Trash2 size={15} />
@@ -832,160 +928,111 @@ export function App() {
       )}
 
       {view === "templates" && (
-        <section className="workspace two-column">
-          <form className="form-panel wide-form" onSubmit={submitTemplate}>
+        <section className="workspace template-workspace">
+          <form className="template-editor" onSubmit={submitTemplate}>
             <div className="section-head">
               <div>
-                <p className="eyebrow">Message</p>
-                <h2>{editingTemplateId ? "Edit Template" : "New Template"}</h2>
+                <p className="eyebrow">Primary Message</p>
+                <h2>Email Template</h2>
               </div>
               <FileText size={18} />
             </div>
-            <label>
-              Name
-              <input
-                value={templateForm.name}
-                placeholder="Senior engineer outreach"
-                onChange={(event) =>
-                  setTemplateForm((current) => ({ ...current, name: event.target.value }))
-                }
-                required
-              />
-            </label>
-            <label>
-              Subject
-              <input
-                value={templateForm.subject}
-                placeholder="Quick question, {{first_name}}"
-                onChange={(event) =>
-                  setTemplateForm((current) => ({ ...current, subject: event.target.value }))
-                }
-                required
-              />
-            </label>
-            <label>
-              Body
-              <textarea
-                rows={9}
-                value={templateForm.bodyText}
-                placeholder="Hi {{first_name}},"
-                onChange={(event) =>
-                  setTemplateForm((current) => ({ ...current, bodyText: event.target.value }))
-                }
-                required
-              />
-            </label>
-            <label>
-              Follow-up Subject
-              <input
-                value={templateForm.followupSubject}
-                onChange={(event) =>
-                  setTemplateForm((current) => ({
-                    ...current,
-                    followupSubject: event.target.value
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Follow-up Body
-              <textarea
-                rows={5}
-                value={templateForm.followupBodyText}
-                onChange={(event) =>
-                  setTemplateForm((current) => ({
-                    ...current,
-                    followupBodyText: event.target.value
-                  }))
-                }
-              />
-            </label>
-            <div className="button-row">
+            <div className="template-grid">
+              <label>
+                Template name
+                <input
+                  value={templateForm.name}
+                  placeholder="Primary outreach"
+                  onChange={(event) =>
+                    setTemplateForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+              <label>
+                Subject
+                <input
+                  value={templateForm.subject}
+                  placeholder="Quick question, {{first_name}}"
+                  onChange={(event) =>
+                    setTemplateForm((current) => ({ ...current, subject: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+              <label className="template-span">
+                First email
+                <textarea
+                  rows={10}
+                  value={templateForm.bodyText}
+                  placeholder="Hi {{first_name}},"
+                  onChange={(event) =>
+                    setTemplateForm((current) => ({ ...current, bodyText: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+              <label>
+                Follow-up subject
+                <input
+                  value={templateForm.followupSubject}
+                  placeholder="Re: {{first_name}}"
+                  onChange={(event) =>
+                    setTemplateForm((current) => ({
+                      ...current,
+                      followupSubject: event.target.value
+                    }))
+                  }
+                />
+              </label>
+              <label className="template-span">
+                Follow-up email
+                <textarea
+                  rows={6}
+                  value={templateForm.followupBodyText}
+                  onChange={(event) =>
+                    setTemplateForm((current) => ({
+                      ...current,
+                      followupBodyText: event.target.value
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="button-row template-actions">
               <button className="primary-button" type="submit" disabled={busy}>
-                <Save size={16} />
-                {editingTemplateId ? "Save" : "Add"}
+                {activeAction === "template" ? (
+                  <RefreshCw className="spin" size={16} />
+                ) : (
+                  <Save size={16} />
+                )}
+                {activeAction === "template" ? "Saving" : "Save Template"}
               </button>
-              {editingTemplateId && (
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() => {
-                    setEditingTemplateId(null);
-                    setTemplateForm(emptyTemplate);
-                  }}
-                >
-                  <X size={16} />
-                  Clear
-                </button>
-              )}
+              <span>Variables: {"{{first_name}}"}, {"{{name}}"}, {"{{location}}"}</span>
             </div>
           </form>
-
-          <section className="list-panel">
-            <div className="section-head">
-              <div>
-                <p className="eyebrow">Library</p>
-                <h2>Templates</h2>
-              </div>
-              <span className="count-badge">{templates.length}</span>
-            </div>
-            <div className="template-list">
-              {templates.length === 0 && <div className="empty-state">No templates yet</div>}
-              {templates.map((template) => (
-                <article className="template-row" key={template.id}>
-                  <div>
-                    <h3>{template.name}</h3>
-                    <p>{template.subject}</p>
-                  </div>
-                  <div className="actions-cell">
-                    <IconButton title="Edit" onClick={() => editTemplate(template)}>
-                      <Edit3 size={15} />
-                    </IconButton>
-                    <IconButton
-                      title="Delete"
-                      tone="danger"
-                      onClick={() =>
-                        run(async () => {
-                          await api.deleteTemplate(template.id);
-                          await loadApp();
-                        }, "Template deleted")
-                      }
-                    >
-                      <Trash2 size={15} />
-                    </IconButton>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
         </section>
       )}
 
       {view === "queue" && (
         <section className="workspace">
           <section className="queue-toolbar">
-            <label>
-              Template
-              <select
-                value={selectedTemplateId}
-                onChange={(event) => setSelectedTemplateId(event.target.value)}
-              >
-                <option value="">Select template</option>
-                {templates.map((template) => (
-                  <option value={template.id} key={template.id}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="queue-template-summary">
+              <span>Template</span>
+              <strong>{templateForm.name || "Primary template not created"}</strong>
+            </div>
             <button
               type="button"
               className="primary-button"
               onClick={() => queueCampaign(true)}
               disabled={!selectedTemplateId || selectedCount === 0 || busy}
             >
-              <Send size={16} />
-              Schedule Selected
+              {activeAction === "schedule" ? (
+                <RefreshCw className="spin" size={16} />
+              ) : (
+                <Send size={16} />
+              )}
+              {activeAction === "schedule" ? "Scheduling" : "Schedule Selected"}
             </button>
             <button
               type="button"
@@ -993,8 +1040,12 @@ export function App() {
               onClick={() => queueCampaign(false)}
               disabled={!selectedTemplateId || busy}
             >
-              <Plus size={16} />
-              Schedule Active
+              {activeAction === "schedule" ? (
+                <RefreshCw className="spin" size={16} />
+              ) : (
+                <Plus size={16} />
+              )}
+              {activeAction === "schedule" ? "Scheduling" : "Schedule Active"}
             </button>
           </section>
 
@@ -1047,7 +1098,11 @@ export function App() {
                             run(async () => {
                               await api.cancelEmail(email.id);
                               await loadApp();
-                            }, "Scheduled email cancelled")
+                            }, {
+                              action: "cancel",
+                              loading: "Cancelling scheduled email...",
+                              success: "Scheduled email cancelled"
+                            })
                           }
                         >
                           <X size={15} />
