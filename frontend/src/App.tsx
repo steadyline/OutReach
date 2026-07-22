@@ -438,70 +438,17 @@ export function App() {
   const currentMeta = viewMeta[view];
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand">
+    <main className="product-shell">
+      <aside className="sidebar">
+        <div className="side-brand">
           <span className="brand-icon">
             <Mail size={22} />
           </span>
           <div>
-            <span className="eyebrow">Outreach Console</span>
-            <h1>Reach</h1>
+            <strong>Reach</strong>
+            <span>Outreach Console</span>
           </div>
         </div>
-        <div className="top-actions">
-          <div className="account-summary">
-            <span className="account-avatar">{senderEmail.slice(0, 1).toUpperCase()}</span>
-            <div>
-              <strong>{user.name ?? "Connected Gmail"}</strong>
-              <span>{senderEmail}</span>
-            </div>
-          </div>
-          <button type="button" className="ghost-button" onClick={() => run(() => loadApp())}>
-            <RefreshCw size={16} />
-            Refresh
-          </button>
-          <button type="button" className="ghost-button" onClick={logout}>
-            <LogOut size={16} />
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <section className="stats-strip">
-        {emailStats.map((item) => (
-          <div className={`stat ${item.tone}`} key={item.label}>
-            <item.icon size={18} />
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-          </div>
-        ))}
-        <div className="stat accent">
-          <Check size={18} />
-          <span>Active</span>
-          <strong>{activeCount}</strong>
-        </div>
-      </section>
-
-      {(notice || error) && (
-        <section className={`notice ${error ? "error" : ""}`}>
-          <span>{error || notice}</span>
-          <button type="button" onClick={() => (error ? setError("") : setNotice(""))}>
-            <X size={16} />
-          </button>
-        </section>
-      )}
-
-      <section className="page-heading">
-        <div>
-          <p className="eyebrow">{currentMeta.eyebrow}</p>
-          <h2>{currentMeta.title}</h2>
-        </div>
-        <span className="connection-pill">
-          <ShieldCheck size={15} />
-          Gmail connected
-        </span>
-      </section>
 
       <nav className="tabs" aria-label="Workspace">
         {[
@@ -521,6 +468,61 @@ export function App() {
           </button>
         ))}
       </nav>
+
+        <div className="side-account">
+          <span className="account-avatar">{senderEmail.slice(0, 1).toUpperCase()}</span>
+          <div>
+            <strong>{user.name ?? "Connected Gmail"}</strong>
+            <span>{senderEmail}</span>
+          </div>
+        </div>
+      </aside>
+
+      <section className="app-shell">
+        <header className="topbar">
+          <div className="page-title">
+            <p className="eyebrow">{currentMeta.eyebrow}</p>
+            <h1>{currentMeta.title}</h1>
+          </div>
+          <div className="top-actions">
+            <span className="connection-pill">
+              <ShieldCheck size={15} />
+              Gmail connected
+            </span>
+            <button type="button" className="ghost-button" onClick={() => run(() => loadApp())}>
+              <RefreshCw size={16} />
+              Refresh
+            </button>
+            <button type="button" className="ghost-button" onClick={logout}>
+              <LogOut size={16} />
+              Sign out
+            </button>
+          </div>
+        </header>
+
+        <section className="stats-strip">
+          {emailStats.map((item) => (
+            <div className={`stat ${item.tone}`} key={item.label}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+              <item.icon size={18} />
+            </div>
+          ))}
+          <div className="stat accent">
+            <span>Active</span>
+            <strong>{activeCount}</strong>
+            <Check size={18} />
+          </div>
+        </section>
+
+        {(notice || error) && (
+          <section className={`notice ${error ? "error" : ""}`}>
+            <span>{error || notice}</span>
+            <button type="button" onClick={() => (error ? setError("") : setNotice(""))}>
+              <X size={16} />
+            </button>
+          </section>
+        )}
 
       {view === "candidates" && (
         <section className="workspace two-column">
@@ -1064,6 +1066,7 @@ export function App() {
           </form>
         </section>
       )}
+      </section>
     </main>
   );
 }
