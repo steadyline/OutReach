@@ -98,7 +98,7 @@ button:disabled {
 .table-panel,
 .list-panel,
 .queue-toolbar,
-.settings-grid {
+.settings-section {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -648,7 +648,7 @@ button:disabled {
 }
 
 .form-panel label,
-.settings-grid label,
+.settings-form label,
 .queue-toolbar label {
   display: grid;
   gap: 7px;
@@ -703,6 +703,33 @@ textarea {
 .button-row {
   flex-wrap: wrap;
   margin-top: 2px;
+}
+
+.import-panel {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.import-panel h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.import-panel span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.hidden-file-input {
+  display: none;
 }
 
 .table-panel {
@@ -909,11 +936,21 @@ td strong {
   width: min(380px, 100%);
 }
 
+.settings-form {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-section {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));
   gap: 14px;
-  padding: 16px;
 }
 
 .check-row {
@@ -1027,4 +1064,3 @@ td strong {
     grid-template-columns: repeat(4, minmax(116px, 1fr));
   }
 }
-

@@ -17,11 +17,13 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   Trash2,
+  Upload,
   UserPlus,
   Users,
   X
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import Papa from "papaparse";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type { Candidate, EmailLog, Settings, Stats, Template, User } from "./types";
 
@@ -65,22 +67,30 @@ const fallbackSettings: Settings = {
   senderName: ""
 };
 
-const supportedValuesOf = (Intl as typeof Intl & {
-  supportedValuesOf?: (key: "timeZone") => string[];
-}).supportedValuesOf;
-
-const timezones =
-  typeof supportedValuesOf === "function"
-    ? supportedValuesOf("timeZone")
-    : [
-        "America/New_York",
-        "America/Chicago",
-        "America/Denver",
-        "America/Los_Angeles",
-        "Europe/London",
-        "Europe/Berlin",
-        "Asia/Tokyo"
-      ];
+const timezoneOptions: Array<[string, string]> = [
+  ["UTC", "UTC"],
+  ["America/New_York", "Eastern Time"],
+  ["America/Chicago", "Central Time"],
+  ["America/Denver", "Mountain Time"],
+  ["America/Los_Angeles", "Pacific Time"],
+  ["America/Toronto", "Toronto"],
+  ["Europe/London", "London"],
+  ["Europe/Berlin", "Berlin"],
+  ["Europe/Paris", "Paris"],
+  ["Asia/Dubai", "Dubai"],
+  ["Asia/Kolkata", "India"],
+  ["Asia/Bangkok", "Bangkok"],
+  ["Asia/Jakarta", "Jakarta"],
+  ["Asia/Manila", "Manila"],
+  ["Asia/Singapore", "Singapore"],
+  ["Asia/Hong_Kong", "Hong Kong"],
+  ["Asia/Shanghai", "Shanghai"],
+  ["Asia/Seoul", "Seoul"],
+  ["Asia/Tokyo", "Tokyo"],
+  ["Australia/Sydney", "Sydney"],
+  ["Australia/Melbourne", "Melbourne"],
+  ["Pacific/Auckland", "Auckland"]
+];
 
 const viewMeta: Record<View, { eyebrow: string; title: string }> = {
   candidates: {
@@ -93,7 +103,7 @@ const viewMeta: Record<View, { eyebrow: string; title: string }> = {
   },
   queue: {
     eyebrow: "Delivery",
-    title: "Send Queue"
+    title: "Outbox"
   },
   settings: {
     eyebrow: "Controls",
@@ -114,7 +124,98 @@ function formatDate(value: string | null) {
 }
 
 function statusLabel(status: string) {
+  if (status === "queued") {
+    return "scheduled";
+  }
   return status.replace(/_/g, " ");
+}
+
+type CandidateCsvRow = Record<string, unknown>;
+
+function csvString(row: CandidateCsvRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value != null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
+
+function csvName(row: CandidateCsvRow) {
+  const fullName = csvString(row, [
+    "name",
+    "full_name",
+    "candidate_name",
+    "person_name",
+    "contact_name"
+  ]);
+  if (fullName) {
+    return fullName;
+  }
+
+  return [csvString(row, ["first_name", "firstname"]), csvString(row, ["last_name", "lastname"])]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function parseCandidateCsv(file: File) {
+  return new Promise<Array<{ name: string; email: string; location: string | null }>>(
+    (resolve, reject) => {
+      Papa.parse<CandidateCsvRow>(file, {
+        header: true,
+        skipEmptyLines: "greedy",
+        transformHeader: (header) =>
+          header.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
+        complete: (result) => {
+          if (result.errors.length) {
+            reject(new Error(result.errors[0].message));
+            return;
+          }
+
+          const invalidRows: number[] = [];
+          const rows = result.data
+            .map((row, index) => {
+              const name = csvName(row);
+              const email = csvString(row, ["email", "email_address", "mail"]).toLowerCase();
+              const location = csvString(row, ["location", "city", "region", "country"]);
+
+              if (!name || !email) {
+                invalidRows.push(index + 2);
+                return null;
+              }
+
+              return {
+                name,
+                email,
+                location: location || null
+              };
+            })
+            .filter((row): row is { name: string; email: string; location: string | null } =>
+              Boolean(row)
+            );
+
+          if (invalidRows.length) {
+            reject(
+              new Error(
+                `CSV rows missing name or email: ${invalidRows.slice(0, 8).join(", ")}`
+              )
+            );
+            return;
+          }
+
+          if (!rows.length) {
+            reject(new Error("CSV did not contain any candidate rows"));
+            return;
+          }
+
+          resolve(rows);
+        },
+        error: (error) => reject(error)
+      });
+    }
+  );
 }
 
 function IconButton({
@@ -166,13 +267,22 @@ export function App() {
   const [templateForm, setTemplateForm] = useState<TemplateForm>(emptyTemplate);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   const selectedCount = selectedCandidateIds.size;
   const activeCount = stats.candidates.active ?? 0;
+  const timezoneSelectOptions = useMemo(() => {
+    const options = [...timezoneOptions];
+    const currentTimezone = settings.timezone;
+    if (currentTimezone && !options.some(([value]) => value === currentTimezone)) {
+      options.unshift([currentTimezone, currentTimezone]);
+    }
+    return options;
+  }, [settings.timezone]);
 
   const emailStats = useMemo(
     () => [
-      { label: "Queued", value: stats.emails.queued ?? 0, icon: Clock, tone: "queued" },
+      { label: "Scheduled", value: stats.emails.queued ?? 0, icon: Clock, tone: "queued" },
       { label: "Sent", value: stats.emails.sent ?? 0, icon: Send, tone: "sent" },
       { label: "Opened", value: stats.emails.opened ?? 0, icon: Eye, tone: "opened" },
       { label: "Failed", value: stats.emails.failed ?? 0, icon: X, tone: "failed" }
@@ -251,6 +361,23 @@ export function App() {
       setEditingCandidateId(null);
       await loadApp();
     }, editingCandidateId ? "Candidate saved" : "Candidate added");
+  }
+
+  async function handleCandidateCsvImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    await run(async () => {
+      const rows = await parseCandidateCsv(file);
+      const result = await api.importCandidates(rows);
+      await loadApp();
+      setNotice(
+        `Imported ${result.imported} candidates: ${result.created} added, ${result.updated} updated, ${result.skipped} duplicate rows skipped`
+      );
+    });
   }
 
   async function submitTemplate(event: FormEvent) {
@@ -454,7 +581,7 @@ export function App() {
         {[
           ["candidates", "Candidates", Users],
           ["templates", "Templates", FileText],
-          ["queue", "Queue", CalendarClock],
+          ["queue", "Outbox", CalendarClock],
           ["settings", "Settings", SettingsIcon]
         ].map(([key, label, Icon]) => (
           <button
@@ -586,6 +713,29 @@ export function App() {
                 </button>
               )}
             </div>
+            <div className="import-panel">
+              <div>
+                <p className="eyebrow">Bulk</p>
+                <h3>Import Candidates</h3>
+                <span>CSV columns: name, email, location</span>
+              </div>
+              <input
+                ref={csvInputRef}
+                className="hidden-file-input"
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCandidateCsvImport}
+              />
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={busy}
+                onClick={() => csvInputRef.current?.click()}
+              >
+                <Upload size={16} />
+                Import CSV
+              </button>
+            </div>
           </form>
 
           <section className="table-panel">
@@ -605,7 +755,7 @@ export function App() {
                 disabled={!selectedTemplateId || selectedCount === 0 || busy}
               >
                 <Send size={16} />
-                Queue {selectedCount || ""}
+                Schedule {selectedCount || ""}
               </button>
             </div>
             <div className="table-wrap">
@@ -835,7 +985,7 @@ export function App() {
               disabled={!selectedTemplateId || selectedCount === 0 || busy}
             >
               <Send size={16} />
-              Queue Selected
+              Schedule Selected
             </button>
             <button
               type="button"
@@ -844,7 +994,7 @@ export function App() {
               disabled={!selectedTemplateId || busy}
             >
               <Plus size={16} />
-              Queue Active
+              Schedule Active
             </button>
           </section>
 
@@ -897,7 +1047,7 @@ export function App() {
                             run(async () => {
                               await api.cancelEmail(email.id);
                               await loadApp();
-                            }, "Queued email cancelled")
+                            }, "Scheduled email cancelled")
                           }
                         >
                           <X size={15} />
@@ -914,155 +1064,202 @@ export function App() {
 
       {view === "settings" && (
         <section className="workspace">
-          <form className="settings-grid" onSubmit={saveSettings}>
-            <label>
-              Daily Limit
-              <input
-                type="number"
-                min={1}
-                max={500}
-                value={settings.dailyLimit}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    dailyLimit: Number(event.target.value)
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Start
-              <input
-                type="time"
-                value={settings.startTime}
-                onChange={(event) =>
-                  setSettings((current) => ({ ...current, startTime: event.target.value }))
-                }
-              />
-            </label>
-            <label>
-              End
-              <input
-                type="time"
-                value={settings.endTime}
-                onChange={(event) =>
-                  setSettings((current) => ({ ...current, endTime: event.target.value }))
-                }
-              />
-            </label>
-            <label>
-              Timezone
-              <input
-                list="timezone-options"
-                value={settings.timezone}
-                onChange={(event) =>
-                  setSettings((current) => ({ ...current, timezone: event.target.value }))
-                }
-              />
-              <datalist id="timezone-options">
-                {timezones.map((timezone) => (
-                  <option key={timezone} value={timezone} />
-                ))}
-              </datalist>
-            </label>
-            <label>
-              Min Gap
-              <input
-                type="number"
-                min={1}
-                max={240}
-                value={settings.minGapMinutes}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    minGapMinutes: Number(event.target.value)
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Max Gap
-              <input
-                type="number"
-                min={1}
-                max={240}
-                value={settings.maxGapMinutes}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    maxGapMinutes: Number(event.target.value)
-                  }))
-                }
-              />
-            </label>
-            <label>
-              First Follow-up
-              <input
-                type="number"
-                min={1}
-                max={60}
-                value={settings.followupAfterDays}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    followupAfterDays: Number(event.target.value)
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Final Follow-up
-              <input
-                type="number"
-                min={1}
-                max={90}
-                value={settings.secondFollowupAfterDays}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    secondFollowupAfterDays: Number(event.target.value)
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Max Follow-ups
-              <input
-                type="number"
-                min={0}
-                max={5}
-                value={settings.maxFollowups}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    maxFollowups: Number(event.target.value)
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Sender Name
-              <input
-                value={settings.senderName ?? ""}
-                onChange={(event) =>
-                  setSettings((current) => ({ ...current, senderName: event.target.value }))
-                }
-              />
-            </label>
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={settings.stopOnOpen}
-                onChange={(event) =>
-                  setSettings((current) => ({ ...current, stopOnOpen: event.target.checked }))
-                }
-              />
-              Stop on open
-            </label>
-            <button className="primary-button save-settings" type="submit" disabled={busy}>
-              <Save size={16} />
-              Save
-            </button>
+          <form className="settings-form" onSubmit={saveSettings}>
+            <section className="settings-section">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Schedule</p>
+                  <h2>Sending Window</h2>
+                </div>
+                <CalendarClock size={18} />
+              </div>
+              <div className="settings-grid">
+                <label>
+                  Emails per day
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={settings.dailyLimit}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        dailyLimit: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Start time
+                  <input
+                    type="time"
+                    value={settings.startTime}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, startTime: event.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  End time
+                  <input
+                    type="time"
+                    value={settings.endTime}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, endTime: event.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  Timezone
+                  <select
+                    value={settings.timezone}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, timezone: event.target.value }))
+                    }
+                  >
+                    {timezoneSelectOptions.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label} - {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-section">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Pace</p>
+                  <h2>Delivery Guard</h2>
+                </div>
+                <Clock size={18} />
+              </div>
+              <div className="settings-grid">
+                <label>
+                  Minimum gap, minutes
+                  <input
+                    type="number"
+                    min={1}
+                    max={240}
+                    value={settings.minGapMinutes}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        minGapMinutes: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Maximum gap, minutes
+                  <input
+                    type="number"
+                    min={1}
+                    max={240}
+                    value={settings.maxGapMinutes}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        maxGapMinutes: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-section">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Follow-ups</p>
+                  <h2>Sequence Rules</h2>
+                </div>
+                <RefreshCw size={18} />
+              </div>
+              <div className="settings-grid">
+                <label>
+                  First follow-up, days
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={settings.followupAfterDays}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        followupAfterDays: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Final follow-up, days
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={settings.secondFollowupAfterDays}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        secondFollowupAfterDays: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Maximum follow-ups
+                  <input
+                    type="number"
+                    min={0}
+                    max={5}
+                    value={settings.maxFollowups}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        maxFollowups: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={settings.stopOnOpen}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, stopOnOpen: event.target.checked }))
+                    }
+                  />
+                  Stop after open
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-section">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Sender</p>
+                  <h2>Identity</h2>
+                </div>
+                <Mail size={18} />
+              </div>
+              <div className="settings-grid">
+                <label>
+                  Sender display name
+                  <input
+                    value={settings.senderName ?? ""}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, senderName: event.target.value }))
+                    }
+                  />
+                </label>
+                <button className="primary-button save-settings" type="submit" disabled={busy}>
+                  <Save size={16} />
+                  Save Settings
+                </button>
+              </div>
+            </section>
           </form>
         </section>
       )}

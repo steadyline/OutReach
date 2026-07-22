@@ -56,6 +56,10 @@ const candidateUpdateSchema = candidateSchema.partial().extend({
   status: z.enum(["active", "suppressed", "bounced", "unsubscribed"]).optional()
 });
 
+const candidateImportSchema = z.object({
+  rows: z.array(candidateSchema).min(1).max(5000)
+});
+
 const templateSchema = z.object({
   name: z.string().trim().min(1),
   subject: z.string().trim().min(1),
@@ -407,6 +411,91 @@ router.post(
       ]
     );
     res.status(201).json(result.rows[0]);
+  })
+);
+
+router.post(
+  "/candidates/import",
+  asyncRoute(async (req, res) => {
+    const parsed = candidateImportSchema.parse(req.body);
+    const deduped = new Map<
+      string,
+      { name: string; email: string; location?: string | null }
+    >();
+    let duplicateRows = 0;
+
+    for (const row of parsed.rows) {
+      if (deduped.has(row.email)) {
+        duplicateRows += 1;
+      }
+      deduped.set(row.email, row);
+    }
+
+    const rows = Array.from(deduped.values());
+    const emails = rows.map((row) => row.email);
+    const suppressions = emails.length
+      ? await query<{ email: string }>(
+          `
+            SELECT lower(email) AS email
+            FROM suppressions
+            WHERE user_id = $1
+              AND lower(email) = ANY($2::text[])
+          `,
+          [userId(req), emails]
+        )
+      : { rows: [] };
+    const suppressedEmails = new Set(suppressions.rows.map((row) => row.email));
+
+    let created = 0;
+    let updated = 0;
+    let suppressed = 0;
+
+    for (const row of rows) {
+      const isSuppressed = suppressedEmails.has(row.email);
+      if (isSuppressed) {
+        suppressed += 1;
+      }
+
+      const result = await query<{ inserted: boolean }>(
+        `
+          INSERT INTO candidates (id, user_id, name, email, location, status)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (user_id, email)
+          DO UPDATE SET name = EXCLUDED.name,
+                        location = EXCLUDED.location,
+                        status = CASE
+                          WHEN candidates.status IN ('unsubscribed', 'bounced') THEN candidates.status
+                          WHEN EXCLUDED.status = 'suppressed' THEN 'suppressed'
+                          ELSE candidates.status
+                        END,
+                        updated_at = now()
+          RETURNING (xmax = 0) AS inserted
+        `,
+        [
+          randomUUID(),
+          userId(req),
+          row.name,
+          row.email,
+          row.location || null,
+          isSuppressed ? "suppressed" : "active"
+        ]
+      );
+
+      if (result.rows[0]?.inserted) {
+        created += 1;
+      } else {
+        updated += 1;
+      }
+    }
+
+    res.status(201).json({
+      received: parsed.rows.length,
+      imported: rows.length,
+      created,
+      updated,
+      skipped: duplicateRows,
+      suppressed
+    });
   })
 );
 

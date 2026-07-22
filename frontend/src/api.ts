@@ -34,6 +34,20 @@ export const api = {
     request<Candidate[]>(`/candidates${search ? `?search=${encodeURIComponent(search)}` : ""}`),
   createCandidate: (candidate: Pick<Candidate, "name" | "email" | "location">) =>
     request<Candidate>("/candidates", { method: "POST", body: JSON.stringify(candidate) }),
+  importCandidates: (
+    rows: Array<Pick<Candidate, "name" | "email"> & { location?: string | null }>
+  ) =>
+    request<{
+      received: number;
+      imported: number;
+      created: number;
+      updated: number;
+      skipped: number;
+      suppressed: number;
+    }>("/candidates/import", {
+      method: "POST",
+      body: JSON.stringify({ rows })
+    }),
   updateCandidate: (
     id: string,
     candidate: Partial<Pick<Candidate, "name" | "email" | "location" | "status">>
@@ -67,4 +81,3 @@ export const api = {
   cancelEmail: (id: string) => request<EmailLog>(`/emails/${id}/cancel`, { method: "POST" }),
   stats: () => request<Stats>("/stats")
 };
-

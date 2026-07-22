@@ -93,3 +93,14 @@ npm run build
 Set the root directory to `frontend`, and configure:
 
 - `VITE_API_URL`: Public Render backend URL.
+
+## Candidate CSV Import
+
+The Candidates screen supports CSV import. Accepted columns:
+
+```csv
+name,email,location
+Adrian Zhang,adrian@example.com,Singapore
+```
+
+Common alternatives such as `full_name`, `candidate_name`, `email_address`, `city`, `region`, and `country` are also accepted. Imports update existing candidates with the same email instead of creating duplicates.
