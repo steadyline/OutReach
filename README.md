@@ -22,6 +22,8 @@ Required:
 - `FRONTEND_URL`: Vercel frontend URL.
 - `BACKEND_PUBLIC_URL`: Public backend URL for tracking pixels and unsubscribe links.
 
+The production API will not start until all required variables above are set in Render. Database migrations only need `DATABASE_URL`, but the running outreach app needs Gmail OAuth and session/token secrets.
+
 Optional:
 
 - `PORT`: Backend port. Render provides this automatically.

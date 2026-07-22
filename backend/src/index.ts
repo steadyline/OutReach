@@ -3,7 +3,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { config } from "./config.js";
+import { config, validateRuntimeConfig } from "./config.js";
 import { runMigrations } from "./migrations.js";
 import { router } from "./routes.js";
 import { startDeliveryWorker } from "./delivery.js";
@@ -58,6 +58,8 @@ app.use(
 );
 
 async function main() {
+  validateRuntimeConfig();
+
   if (config.runMigrations) {
     await runMigrations();
   }
@@ -76,4 +78,3 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-
