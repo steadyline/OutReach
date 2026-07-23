@@ -113,11 +113,26 @@ export async function runMigrations() {
       PRIMARY KEY (user_id, local_date)
     );
 
+    CREATE TABLE IF NOT EXISTS email_open_events (
+      id TEXT PRIMARY KEY,
+      email_id TEXT NOT NULL REFERENCES emails(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      candidate_id TEXT NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ip TEXT,
+      user_agent TEXT,
+      referer TEXT,
+      source TEXT NOT NULL DEFAULT 'unknown',
+      ignored BOOLEAN NOT NULL DEFAULT false,
+      ignore_reason TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_candidates_user_email ON candidates(user_id, email);
     CREATE INDEX IF NOT EXISTS idx_candidates_user_status ON candidates(user_id, status);
     CREATE INDEX IF NOT EXISTS idx_emails_due ON emails(status, scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_emails_user_status ON emails(user_id, status);
     CREATE INDEX IF NOT EXISTS idx_emails_tracking_token ON emails(tracking_token);
+    CREATE INDEX IF NOT EXISTS idx_email_open_events_email ON email_open_events(email_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_suppressions_user_email ON suppressions(user_id, email);
   `);
 }

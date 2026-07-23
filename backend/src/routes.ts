@@ -344,7 +344,7 @@ router.get(
 router.get(
   "/track/open/:token.png",
   asyncRoute(async (req, res) => {
-    await handleOpenToken(req.params.token);
+    await handleOpenToken(req.params.token, req);
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.end(transparentPixel);
@@ -839,20 +839,112 @@ router.get(
   })
 );
 
-export async function handleOpenToken(token: string) {
+type OpenTrackingRequest = Pick<express.Request, "get" | "ip" | "ips">;
+
+const openConfirmationGraceMs = 2 * 60 * 1000;
+
+function trackingRequestSource(userAgent: string) {
+  const normalized = userAgent.toLowerCase();
+  if (normalized.includes("googleimageproxy") || normalized.includes("google image proxy")) {
+    return "gmail_image_proxy";
+  }
+  if (normalized.includes("apple")) {
+    return "apple_or_mail_client";
+  }
+  if (
+    normalized.includes("proofpoint") ||
+    normalized.includes("mimecast") ||
+    normalized.includes("barracuda") ||
+    normalized.includes("symantec") ||
+    normalized.includes("forcepoint") ||
+    normalized.includes("trend micro")
+  ) {
+    return "security_scanner";
+  }
+  if (normalized.includes("bot") || normalized.includes("crawler") || normalized.includes("spider")) {
+    return "automated_client";
+  }
+  return "unknown";
+}
+
+function openIgnoreReason(input: {
+  status: string;
+  sentAt: Date | null;
+  now: Date;
+  source: string;
+}) {
+  if (!input.sentAt || !["sent", "opened"].includes(input.status)) {
+    return "email_not_sent_yet";
+  }
+
+  const ageMs = input.now.getTime() - input.sentAt.getTime();
+  if (ageMs < openConfirmationGraceMs) {
+    return "too_soon_after_send";
+  }
+
+  if (input.source === "security_scanner" || input.source === "automated_client") {
+    return input.source;
+  }
+
+  return null;
+}
+
+export async function handleOpenToken(token: string, req?: OpenTrackingRequest) {
+  const now = new Date();
+  const userAgent = req?.get("user-agent") ?? "";
+  const referer = req?.get("referer") ?? null;
+  const ip = req?.ips?.[0] ?? req?.ip ?? null;
+  const source = trackingRequestSource(userAgent);
   const email = await query<{
     id: string;
     user_id: string;
     candidate_id: string;
     status: string;
-  }>("SELECT id, user_id, candidate_id, status FROM emails WHERE tracking_token = $1", [token]);
+    sent_at: Date | null;
+  }>(
+    "SELECT id, user_id, candidate_id, status, sent_at FROM emails WHERE tracking_token = $1",
+    [token]
+  );
 
   const row = email.rows[0];
   if (!row) {
     return;
   }
 
+  const ignoreReason = openIgnoreReason({
+    status: row.status,
+    sentAt: row.sent_at,
+    now,
+    source
+  });
+
   await query(
+    `
+      INSERT INTO email_open_events (
+        id, email_id, user_id, candidate_id, ip, user_agent, referer,
+        source, ignored, ignore_reason
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `,
+    [
+      randomUUID(),
+      row.id,
+      row.user_id,
+      row.candidate_id,
+      ip,
+      userAgent || null,
+      referer,
+      source,
+      Boolean(ignoreReason),
+      ignoreReason
+    ]
+  );
+
+  if (ignoreReason) {
+    return;
+  }
+
+  const confirmedOpen = await query<{ id: string }>(
     `
       UPDATE emails
       SET status = CASE WHEN status = 'sent' THEN 'opened' ELSE status END,
@@ -860,9 +952,16 @@ export async function handleOpenToken(token: string) {
           open_count = open_count + 1,
           updated_at = now()
       WHERE id = $1
+        AND status IN ('sent', 'opened')
+        AND sent_at IS NOT NULL
+      RETURNING id
     `,
     [row.id]
   );
+
+  if (!confirmedOpen.rows[0]) {
+    return;
+  }
 
   await query(
     `
