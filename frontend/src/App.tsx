@@ -1376,14 +1376,12 @@ export function App() {
           <section className="table-panel">
             <div className="panel-toolbar">
               <h2>Email Activity</h2>
-              <span>Oldest first</span>
             </div>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Candidate</th>
-                    <th>Template</th>
                     <th>Step</th>
                     <th>Status</th>
                     <th>Scheduled</th>
@@ -1395,7 +1393,7 @@ export function App() {
                 <tbody>
                   {emails.length === 0 && (
                     <tr>
-                      <td className="empty-row" colSpan={8}>
+                      <td className="empty-row" colSpan={7}>
                         No email activity yet
                       </td>
                     </tr>
@@ -1406,7 +1404,6 @@ export function App() {
                         <strong>{email.candidate_name}</strong>
                         <span className="subcell">{email.candidate_email}</span>
                       </td>
-                      <td>{email.template_name}</td>
                       <td>{email.sequence_step === 0 ? "Initial" : `Follow-up ${email.sequence_step}`}</td>
                       <td>
                         <span className={`pill ${email.status}`}>{statusLabel(email.status)}</span>
