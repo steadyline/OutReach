@@ -71,11 +71,6 @@ export const api = {
       followupBodyText: string | null;
     }>
   ) => request<Template>(`/templates/${id}`, { method: "PATCH", body: JSON.stringify(template) }),
-  queueCampaign: (body: { templateId: string; candidateIds?: string[] }) =>
-    request<{ queued: number; skipped: number }>("/campaigns/queue", {
-      method: "POST",
-      body: JSON.stringify(body)
-    }),
   planToday: () =>
     request<{ queued: number; followups: number; initial: number; skipped: number; reason?: string }>(
       "/campaigns/plan-today",

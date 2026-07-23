@@ -1044,26 +1044,6 @@ export function App() {
 
       {view === "queue" && (
         <section className="workspace">
-          <section className="queue-toolbar">
-            <div className="queue-template-summary">
-              <span>Template</span>
-              <strong>{templateForm.name || "Primary template not created"}</strong>
-            </div>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={planToday}
-              disabled={!selectedTemplateId || busy}
-            >
-              {activeAction === "plan" ? (
-                <RefreshCw className="spin" size={16} />
-              ) : (
-                <CalendarClock size={16} />
-              )}
-              {activeAction === "plan" ? "Planning" : "Plan Today"}
-            </button>
-          </section>
-
           <section className="table-panel">
             <div className="panel-toolbar">
               <h2>Email Activity</h2>
@@ -1080,7 +1060,7 @@ export function App() {
                     <th>Scheduled</th>
                     <th>Sent</th>
                     <th>Opened</th>
-                    <th>Actions</th>
+                    <th className="actions-header">Actions</th>
                   </tr>
                 </thead>
                 <tbody>

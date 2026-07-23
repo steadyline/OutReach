@@ -98,7 +98,6 @@ button:disabled {
 .login-preview,
 .form-panel,
 .table-panel,
-.queue-toolbar,
 .settings-section,
 .template-editor {
   background: var(--panel);
@@ -519,8 +518,7 @@ button:disabled {
 .top-actions,
 .button-row,
 .actions-cell,
-.panel-toolbar,
-.queue-toolbar {
+.panel-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -633,10 +631,6 @@ button:disabled {
   margin-bottom: 2px;
 }
 
-.section-head svg {
-  color: var(--primary);
-}
-
 .form-panel h2,
 .table-panel h2 {
   font-size: 16px;
@@ -645,8 +639,7 @@ button:disabled {
 
 .form-panel label,
 .template-editor label,
-.settings-form label,
-.queue-toolbar label {
+.settings-form label {
   display: grid;
   gap: 7px;
   color: #344054;
@@ -855,9 +848,15 @@ td strong {
   white-space: nowrap;
 }
 
+.actions-header {
+  width: 104px;
+  text-align: center;
+}
+
 .activity-actions {
-  min-width: 84px;
-  border-bottom-color: transparent;
+  width: 104px;
+  min-width: 104px;
+  justify-content: center;
 }
 
 .icon-button {
@@ -928,35 +927,6 @@ td strong {
 .pill.suppressed {
   color: var(--amber);
   background: var(--amber-soft);
-}
-
-.queue-toolbar {
-  min-height: 68px;
-  padding: 12px;
-  flex-wrap: wrap;
-}
-
-.queue-template-summary {
-  min-width: min(420px, 100%);
-  display: grid;
-  gap: 3px;
-  margin-right: auto;
-}
-
-.queue-template-summary span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.queue-template-summary strong {
-  color: var(--text);
-  font-size: 14px;
-}
-
-.queue-toolbar label {
-  width: min(380px, 100%);
 }
 
 .settings-workspace {
