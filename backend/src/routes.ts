@@ -449,26 +449,78 @@ router.get(
   "/candidates",
   asyncRoute(async (req, res) => {
     const search = String(req.query.search ?? "").trim();
-    const params = [userId(req)];
+    const sort = String(req.query.sort ?? "newest");
+    const requestedPage = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(5, Number(req.query.pageSize) || 10));
+    const filterParams = [userId(req)];
     let filter = "";
     if (search) {
-      params.push(`%${search.toLowerCase()}%`);
+      filterParams.push(`%${search.toLowerCase()}%`);
       filter = `AND (
-        lower(name) LIKE $2 OR lower(email) LIKE $2 OR lower(coalesce(location, '')) LIKE $2
+        lower(c.name) LIKE $2 OR lower(c.email) LIKE $2 OR lower(coalesce(c.location, '')) LIKE $2
       )`;
     }
+    const orderBy =
+      sort === "initial"
+        ? `
+          CASE
+            WHEN c.status IN ('active', 'failed')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM suppressions s
+                WHERE s.user_id = c.user_id
+                  AND lower(s.email) = lower(c.email)
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM emails e
+                WHERE e.candidate_id = c.id
+                  AND e.sequence_step = 0
+                  AND e.status IN ('queued', 'sent', 'opened')
+              )
+            THEN 0
+            ELSE 1
+          END ASC,
+          c.created_at ASC,
+          c.id ASC
+        `
+        : "c.created_at DESC, c.id DESC";
+
+    const countResult = await query<{ count: string }>(
+      `
+        SELECT count(*)::text AS count
+        FROM candidates c
+        WHERE c.user_id = $1
+          ${filter}
+      `,
+      filterParams
+    );
+    const total = Number(countResult.rows[0]?.count ?? 0);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
+    const limitParamIndex = filterParams.length + 1;
+    const offsetParamIndex = filterParams.length + 2;
 
     const result = await query(
       `
-        SELECT *
-        FROM candidates
-        WHERE user_id = $1
+        SELECT c.*
+        FROM candidates c
+        WHERE c.user_id = $1
           ${filter}
-        ORDER BY created_at DESC
+        ORDER BY ${orderBy}
+        LIMIT $${limitParamIndex}
+        OFFSET $${offsetParamIndex}
       `,
-      params
+      [...filterParams, pageSize, offset]
     );
-    res.json(result.rows);
+    res.json({
+      data: result.rows,
+      page,
+      pageSize,
+      total,
+      totalPages
+    });
   })
 );
 

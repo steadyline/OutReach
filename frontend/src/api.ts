@@ -1,4 +1,4 @@
-import type { Candidate, EmailLog, Settings, Stats, Template, User } from "./types";
+import type { Candidate, CandidatePage, EmailLog, Settings, Stats, Template, User } from "./types";
 
 export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
@@ -30,8 +30,27 @@ export const api = {
   settings: () => request<Settings>("/settings"),
   saveSettings: (settings: Settings) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(settings) }),
-  candidates: (search = "") =>
-    request<Candidate[]>(`/candidates${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  candidates: ({
+    search = "",
+    page = 1,
+    pageSize = 10,
+    sort = "newest"
+  }: {
+    search?: string;
+    page?: number;
+    pageSize?: number;
+    sort?: "newest" | "initial";
+  } = {}) => {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+      sort
+    });
+    if (search) {
+      params.set("search", search);
+    }
+    return request<CandidatePage>(`/candidates?${params.toString()}`);
+  },
   createCandidate: (candidate: Pick<Candidate, "name" | "email" | "location">) =>
     request<Candidate>("/candidates", { method: "POST", body: JSON.stringify(candidate) }),
   importCandidates: (

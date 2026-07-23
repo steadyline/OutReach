@@ -28,6 +28,14 @@ export type Candidate = {
   created_at: string;
 };
 
+export type CandidatePage = {
+  data: Candidate[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 export type Template = {
   id: string;
   name: string;

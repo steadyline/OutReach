@@ -8,6 +8,8 @@ import {
   Eye,
   FileText,
   Inbox,
+  ChevronLeft,
+  ChevronRight,
   LogOut,
   Mail,
   RefreshCw,
@@ -36,6 +38,8 @@ type CandidateForm = {
   location: string;
 };
 
+type CandidateSort = "newest" | "initial";
+
 type TemplateForm = {
   name: string;
   subject: string;
@@ -46,6 +50,7 @@ type TemplateForm = {
 
 type ActionKey =
   | "candidate"
+  | "updateCandidate"
   | "import"
   | "template"
   | "settings"
@@ -55,9 +60,16 @@ type ActionKey =
   | "deleteEmail"
   | "logout"
   | "cancel"
+  | "page"
   | "search";
 
 const emptyCandidate: CandidateForm = { name: "", email: "", location: "" };
+const defaultCandidatePagination = {
+  page: 1,
+  pageSize: 10,
+  total: 0,
+  totalPages: 1
+};
 const emptyTemplate: TemplateForm = {
   name: "",
   subject: "",
@@ -313,13 +325,16 @@ export function App() {
   const [authError, setAuthError] = useState("");
 
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [candidatePagination, setCandidatePagination] = useState(defaultCandidatePagination);
   const [emails, setEmails] = useState<EmailLog[]>([]);
   const [settings, setSettings] = useState<Settings>(fallbackSettings);
   const [stats, setStats] = useState<Stats>({ emails: {}, candidates: {} });
 
   const [search, setSearch] = useState("");
+  const [candidateSort, setCandidateSort] = useState<CandidateSort>("newest");
   const [candidateForm, setCandidateForm] = useState<CandidateForm>(emptyCandidate);
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null);
+  const [candidateEditForm, setCandidateEditForm] = useState<CandidateForm>(emptyCandidate);
 
   const [templateForm, setTemplateForm] = useState<TemplateForm>(emptyTemplate);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
@@ -359,15 +374,31 @@ export function App() {
     [emails]
   );
 
-  async function loadApp(searchValue = search) {
-    const [candidateData, templateData, emailData, settingsData, statsData] = await Promise.all([
-      api.candidates(searchValue),
+  async function loadApp(
+    searchValue = search,
+    pageValue = candidatePagination.page,
+    pageSizeValue = candidatePagination.pageSize,
+    sortValue = candidateSort
+  ) {
+    const [candidatePageData, templateData, emailData, settingsData, statsData] = await Promise.all([
+      api.candidates({
+        search: searchValue,
+        page: pageValue,
+        pageSize: pageSizeValue,
+        sort: sortValue
+      }),
       api.templates(),
       api.emails(),
       api.settings(),
       api.stats()
     ]);
-    setCandidates(candidateData);
+    setCandidates(candidatePageData.data);
+    setCandidatePagination({
+      page: candidatePageData.page,
+      pageSize: candidatePageData.pageSize,
+      total: candidatePageData.total,
+      totalPages: candidatePageData.totalPages
+    });
     setEmails(emailData);
     setSettings(settingsData);
     setStats(statsData);
@@ -410,11 +441,23 @@ export function App() {
     }
 
     const intervalId = window.setInterval(() => {
-      void loadApp(search);
+      void loadApp(
+        search,
+        candidatePagination.page,
+        candidatePagination.pageSize,
+        candidateSort
+      );
     }, 8_000);
 
     return () => window.clearInterval(intervalId);
-  }, [hasQueuedEmails, search, user]);
+  }, [
+    candidatePagination.page,
+    candidatePagination.pageSize,
+    candidateSort,
+    hasQueuedEmails,
+    search,
+    user
+  ]);
 
   async function run<T>(
     action: () => Promise<T>,
@@ -453,26 +496,17 @@ export function App() {
   async function submitCandidate(event: FormEvent) {
     event.preventDefault();
     await run(async () => {
-      if (editingCandidateId) {
-        await api.updateCandidate(editingCandidateId, {
-          name: candidateForm.name,
-          email: candidateForm.email,
-          location: candidateForm.location || null
-        });
-      } else {
-        await api.createCandidate({
-          name: candidateForm.name,
-          email: candidateForm.email,
-          location: candidateForm.location || null
-        });
-      }
+      await api.createCandidate({
+        name: candidateForm.name,
+        email: candidateForm.email,
+        location: candidateForm.location || null
+      });
       setCandidateForm(emptyCandidate);
-      setEditingCandidateId(null);
-      await loadApp();
+      await loadApp(search, 1, candidatePagination.pageSize, candidateSort);
     }, {
       action: "candidate",
-      loading: editingCandidateId ? "Saving candidate..." : "Adding candidate...",
-      success: editingCandidateId ? "Candidate saved" : "Candidate added"
+      loading: "Adding candidate...",
+      success: "Candidate added"
     });
   }
 
@@ -486,7 +520,7 @@ export function App() {
     await run(async () => {
       const rows = await parseCandidateCsv(file);
       const result = await api.importCandidates(rows);
-      await loadApp();
+      await loadApp(search, 1, candidatePagination.pageSize, candidateSort);
       return result;
     }, {
       action: "import",
@@ -556,22 +590,90 @@ export function App() {
     });
   }
 
-  function editCandidate(candidate: Candidate) {
+  function startCandidateEdit(candidate: Candidate) {
     setEditingCandidateId(candidate.id);
-    setCandidateForm({
+    setCandidateEditForm({
       name: candidate.name,
       email: candidate.email,
       location: candidate.location ?? ""
     });
-    setView("candidates");
+  }
+
+  function cancelCandidateEdit() {
+    setEditingCandidateId(null);
+    setCandidateEditForm(emptyCandidate);
+  }
+
+  async function saveCandidateEdit(candidateId: string) {
+    const payload = {
+      name: candidateEditForm.name.trim(),
+      email: candidateEditForm.email.trim(),
+      location: candidateEditForm.location.trim() || null
+    };
+
+    if (!payload.name || !payload.email) {
+      toast.error("Name and email are required");
+      return;
+    }
+
+    await run(async () => {
+      await api.updateCandidate(candidateId, payload);
+      cancelCandidateEdit();
+      await loadApp();
+    }, {
+      action: "updateCandidate",
+      loading: "Updating candidate...",
+      success: "Candidate updated"
+    });
   }
 
   async function handleSearch(event: FormEvent) {
     event.preventDefault();
     await run(async () => {
-      await loadApp(search);
+      cancelCandidateEdit();
+      await loadApp(search, 1, candidatePagination.pageSize, candidateSort);
     }, {
       action: "search"
+    });
+  }
+
+  async function changeCandidatePage(page: number) {
+    const nextPage = Math.min(Math.max(1, page), candidatePagination.totalPages);
+    if (nextPage === candidatePagination.page) {
+      return;
+    }
+
+    cancelCandidateEdit();
+    await run(async () => {
+      await loadApp(search, nextPage, candidatePagination.pageSize, candidateSort);
+    }, {
+      action: "page"
+    });
+  }
+
+  async function changeCandidatePageSize(event: ChangeEvent<HTMLSelectElement>) {
+    const nextPageSize = Number(event.target.value);
+    cancelCandidateEdit();
+    setCandidatePagination((current) => ({
+      ...current,
+      page: 1,
+      pageSize: nextPageSize
+    }));
+    await run(async () => {
+      await loadApp(search, 1, nextPageSize, candidateSort);
+    }, {
+      action: "page"
+    });
+  }
+
+  async function changeCandidateSort(event: ChangeEvent<HTMLSelectElement>) {
+    const nextSort = event.target.value as CandidateSort;
+    cancelCandidateEdit();
+    setCandidateSort(nextSort);
+    await run(async () => {
+      await loadApp(search, 1, candidatePagination.pageSize, nextSort);
+    }, {
+      action: "page"
     });
   }
 
@@ -580,6 +682,7 @@ export function App() {
       await api.logout();
       setUser(null);
       setCandidates([]);
+      setCandidatePagination(defaultCandidatePagination);
       setEmails([]);
     }, {
       action: "logout",
@@ -679,6 +782,14 @@ export function App() {
   const senderEmail = user.sender_email ?? user.email;
   const accountInitials = userInitials(user.name, senderEmail);
   const currentMeta = viewMeta[view];
+  const candidateRangeStart =
+    candidatePagination.total === 0
+      ? 0
+      : (candidatePagination.page - 1) * candidatePagination.pageSize + 1;
+  const candidateRangeEnd = Math.min(
+    candidatePagination.total,
+    candidatePagination.page * candidatePagination.pageSize
+  );
 
   return (
     <main className="product-shell">
@@ -789,7 +900,7 @@ export function App() {
             <div className="section-head">
               <div>
                 <p className="eyebrow">Record</p>
-                <h2>{editingCandidateId ? "Edit Candidate" : "Add Candidate"}</h2>
+                <h2>Add Candidate</h2>
               </div>
               <UserPlus size={18} />
             </div>
@@ -833,27 +944,8 @@ export function App() {
                 ) : (
                   <Save size={16} />
                 )}
-                {activeAction === "candidate"
-                  ? editingCandidateId
-                    ? "Saving"
-                    : "Adding"
-                  : editingCandidateId
-                    ? "Save"
-                    : "Add"}
+                {activeAction === "candidate" ? "Adding" : "Add"}
               </button>
-              {editingCandidateId && (
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() => {
-                    setEditingCandidateId(null);
-                    setCandidateForm(emptyCandidate);
-                  }}
-                >
-                  <X size={16} />
-                  Clear
-                </button>
-              )}
             </div>
             <div className="import-panel">
               <div>
@@ -894,19 +986,28 @@ export function App() {
                   placeholder="Search candidates"
                 />
               </form>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={planToday}
-                disabled={!selectedTemplateId || busy}
-              >
-                {activeAction === "plan" ? (
-                  <RefreshCw className="spin" size={16} />
-                ) : (
-                  <CalendarClock size={16} />
-                )}
-                {activeAction === "plan" ? "Planning" : "Plan Today"}
-              </button>
+              <div className="toolbar-actions">
+                <label className="sort-control">
+                  Sort
+                  <select value={candidateSort} onChange={changeCandidateSort} disabled={busy}>
+                    <option value="newest">Newest first</option>
+                    <option value="initial">Initial send order</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={planToday}
+                  disabled={!selectedTemplateId || busy}
+                >
+                  {activeAction === "plan" ? (
+                    <RefreshCw className="spin" size={16} />
+                  ) : (
+                    <CalendarClock size={16} />
+                  )}
+                  {activeAction === "plan" ? "Planning" : "Plan Today"}
+                </button>
+              </div>
             </div>
             <div className="table-wrap">
               <table>
@@ -915,6 +1016,7 @@ export function App() {
                     <th>Name</th>
                     <th>Email</th>
                     <th>Location</th>
+                    <th>Created</th>
                     <th>Status</th>
                     <th>Opened</th>
                     <th>Last contact</th>
@@ -924,16 +1026,70 @@ export function App() {
                 <tbody>
                   {candidates.length === 0 && (
                     <tr>
-                      <td className="empty-row" colSpan={7}>
+                      <td className="empty-row" colSpan={8}>
                         No candidates found
                       </td>
                     </tr>
                   )}
-                  {candidates.map((candidate) => (
-                    <tr key={candidate.id}>
-                      <td>{candidate.name}</td>
-                      <td>{candidate.email}</td>
-                      <td>{candidate.location || "-"}</td>
+                  {candidates.map((candidate) => {
+                    const isEditing = editingCandidateId === candidate.id;
+                    const isUpdating = isEditing && activeAction === "updateCandidate";
+
+                    return (
+                    <tr className={isEditing ? "editing-row" : undefined} key={candidate.id}>
+                      <td>
+                        {isEditing ? (
+                          <input
+                            className="table-input"
+                            value={candidateEditForm.name}
+                            onChange={(event) =>
+                              setCandidateEditForm((current) => ({
+                                ...current,
+                                name: event.target.value
+                              }))
+                            }
+                            aria-label="Candidate name"
+                          />
+                        ) : (
+                          candidate.name
+                        )}
+                      </td>
+                      <td>
+                        {isEditing ? (
+                          <input
+                            className="table-input"
+                            type="email"
+                            value={candidateEditForm.email}
+                            onChange={(event) =>
+                              setCandidateEditForm((current) => ({
+                                ...current,
+                                email: event.target.value
+                              }))
+                            }
+                            aria-label="Candidate email"
+                          />
+                        ) : (
+                          candidate.email
+                        )}
+                      </td>
+                      <td>
+                        {isEditing ? (
+                          <input
+                            className="table-input"
+                            value={candidateEditForm.location}
+                            onChange={(event) =>
+                              setCandidateEditForm((current) => ({
+                                ...current,
+                                location: event.target.value
+                              }))
+                            }
+                            aria-label="Candidate location"
+                          />
+                        ) : (
+                          candidate.location || "-"
+                        )}
+                      </td>
+                      <td>{formatDate(candidate.created_at)}</td>
                       <td>
                         <span className={`pill ${candidate.status}`}>
                           {statusLabel(candidate.status)}
@@ -941,31 +1097,110 @@ export function App() {
                       </td>
                       <td>{candidate.open_count ? `${candidate.open_count}x` : "No"}</td>
                       <td>{formatDate(candidate.last_contacted_at)}</td>
-                      <td className="actions-cell">
-                        <IconButton title="Edit" onClick={() => editCandidate(candidate)}>
-                          <Edit3 size={15} />
-                        </IconButton>
-                        <IconButton
-                          title="Delete"
-                          tone="danger"
-                          onClick={() =>
-                            run(async () => {
-                              await api.deleteCandidate(candidate.id);
-                              await loadApp();
-                            }, {
-                              action: "delete",
-                              loading: "Deleting candidate...",
-                              success: "Candidate deleted"
-                            })
-                          }
-                        >
-                          <Trash2 size={15} />
-                        </IconButton>
+                      <td className="actions-cell candidate-actions">
+                        {isEditing ? (
+                          <>
+                            <button
+                              className="row-action primary"
+                              type="button"
+                              disabled={busy}
+                              onClick={() => saveCandidateEdit(candidate.id)}
+                            >
+                              {isUpdating ? (
+                                <RefreshCw className="spin" size={14} />
+                              ) : (
+                                <Save size={14} />
+                              )}
+                              {isUpdating ? "Updating" : "Update"}
+                            </button>
+                            <button
+                              className="row-action"
+                              type="button"
+                              disabled={busy}
+                              onClick={cancelCandidateEdit}
+                            >
+                              <X size={14} />
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <IconButton
+                              title="Edit"
+                              disabled={busy}
+                              onClick={() => startCandidateEdit(candidate)}
+                            >
+                              <Edit3 size={15} />
+                            </IconButton>
+                            <IconButton
+                              title="Delete"
+                              tone="danger"
+                              disabled={busy}
+                              onClick={() =>
+                                run(async () => {
+                                  await api.deleteCandidate(candidate.id);
+                                  await loadApp();
+                                }, {
+                                  action: "delete",
+                                  loading: "Deleting candidate...",
+                                  success: "Candidate deleted"
+                                })
+                              }
+                            >
+                              <Trash2 size={15} />
+                            </IconButton>
+                          </>
+                        )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+            <div className="pagination-bar">
+              <span>
+                {candidatePagination.total === 0
+                  ? "0 candidates"
+                  : `${candidateRangeStart}-${candidateRangeEnd} of ${candidatePagination.total}`}
+              </span>
+              <div className="pagination-controls">
+                <label>
+                  Rows
+                  <select
+                    value={candidatePagination.pageSize}
+                    onChange={changeCandidatePageSize}
+                    disabled={busy}
+                  >
+                    {[10, 25, 50, 100].map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="icon-button pagination-icon"
+                  type="button"
+                  title="Previous page"
+                  disabled={busy || candidatePagination.page <= 1}
+                  onClick={() => changeCandidatePage(candidatePagination.page - 1)}
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                <span className="page-count">
+                  Page {candidatePagination.page} of {candidatePagination.totalPages}
+                </span>
+                <button
+                  className="icon-button pagination-icon"
+                  type="button"
+                  title="Next page"
+                  disabled={busy || candidatePagination.page >= candidatePagination.totalPages}
+                  onClick={() => changeCandidatePage(candidatePagination.page + 1)}
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
             </div>
           </section>
         </section>
