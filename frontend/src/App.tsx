@@ -10,7 +10,6 @@ import {
   Inbox,
   LogOut,
   Mail,
-  Plus,
   RefreshCw,
   Save,
   Search,
@@ -50,7 +49,7 @@ type ActionKey =
   | "import"
   | "template"
   | "settings"
-  | "schedule"
+  | "plan"
   | "refresh"
   | "delete"
   | "deleteEmail"
@@ -143,6 +142,20 @@ function statusLabel(status: string) {
     return "scheduled";
   }
   return status.replace(/_/g, " ");
+}
+
+function authErrorMessage(code: string) {
+  const messages: Record<string, string> = {
+    missing_gmail_send_scope:
+      "Google did not grant Gmail sending permission. Reconnect Gmail and approve the Gmail send scope.",
+    reconnect_gmail_send_scope:
+      "Reconnect Gmail to replace the old token with Gmail sending permission.",
+    missing_refresh_token:
+      "Google did not return an offline token. Reconnect Gmail and approve access again.",
+    invalid_state: "Google sign-in expired. Please try again.",
+    missing_profile: "Google did not return your profile. Please try again."
+  };
+  return messages[code] ?? "Google connection failed. Please reconnect Gmail.";
 }
 
 function userInitials(name: string | null, email: string) {
@@ -307,7 +320,6 @@ export function App() {
   const [search, setSearch] = useState("");
   const [candidateForm, setCandidateForm] = useState<CandidateForm>(emptyCandidate);
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null);
-  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
 
   const [templateForm, setTemplateForm] = useState<TemplateForm>(emptyTemplate);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
@@ -315,7 +327,6 @@ export function App() {
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const busy = activeAction !== null;
-  const selectedCount = selectedCandidateIds.size;
   const activeCount = stats.candidates.active ?? 0;
   const timezoneSelectOptions = useMemo(() => {
     const options = [...timezoneOptions];
@@ -365,6 +376,14 @@ export function App() {
   async function refreshAuth() {
     setLoading(true);
     try {
+      const authErrorCode = new URLSearchParams(window.location.search).get("auth_error");
+      if (authErrorCode) {
+        const message = authErrorMessage(authErrorCode);
+        setAuthError(message);
+        toast.error(message);
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+
       const result = await api.me();
       setUser(result.user);
       if (result.user) {
@@ -500,24 +519,24 @@ export function App() {
     });
   }
 
-  async function queueCampaign(useSelection: boolean) {
+  async function planToday() {
     if (!selectedTemplateId) {
-      toast.error("Create the primary template before scheduling emails");
+      toast.error("Create the primary template before planning today");
       return;
     }
 
     await run(async () => {
-      const result = await api.queueCampaign({
-        templateId: selectedTemplateId,
-        candidateIds: useSelection ? Array.from(selectedCandidateIds) : undefined
-      });
+      const result = await api.planToday();
       await loadApp();
       setView("queue");
       return result;
     }, {
-      action: "schedule",
-      loading: useSelection ? "Scheduling selected candidates..." : "Scheduling active candidates...",
-      success: (result) => `${result.queued} scheduled, ${result.skipped} skipped`
+      action: "plan",
+      loading: "Planning today's outbox...",
+      success: (result) =>
+        result.queued
+          ? `${result.queued} planned today: ${result.followups} follow-ups, ${result.initial} new`
+          : "Today's outbox is already planned"
     });
   }
 
@@ -529,18 +548,6 @@ export function App() {
       location: candidate.location ?? ""
     });
     setView("candidates");
-  }
-
-  function toggleCandidate(id: string) {
-    setSelectedCandidateIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
   }
 
   async function handleSearch(event: FormEvent) {
@@ -721,10 +728,10 @@ export function App() {
             <h1>{currentMeta.title}</h1>
           </div>
           <div className="top-actions">
-            <span className="connection-pill">
+            <a className="connection-pill" href={api.authUrl} title="Reconnect Gmail">
               <ShieldCheck size={15} />
               Gmail connected
-            </span>
+            </a>
             <button
               type="button"
               className="ghost-button"
@@ -874,22 +881,21 @@ export function App() {
               <button
                 type="button"
                 className="ghost-button"
-                onClick={() => queueCampaign(true)}
-                disabled={!selectedTemplateId || selectedCount === 0 || busy}
+                onClick={planToday}
+                disabled={!selectedTemplateId || busy}
               >
-                {activeAction === "schedule" ? (
+                {activeAction === "plan" ? (
                   <RefreshCw className="spin" size={16} />
                 ) : (
-                  <Send size={16} />
+                  <CalendarClock size={16} />
                 )}
-                {activeAction === "schedule" ? "Scheduling" : `Schedule ${selectedCount || ""}`}
+                {activeAction === "plan" ? "Planning" : "Plan Today"}
               </button>
             </div>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th aria-label="Select"></th>
                     <th>Name</th>
                     <th>Email</th>
                     <th>Location</th>
@@ -902,21 +908,13 @@ export function App() {
                 <tbody>
                   {candidates.length === 0 && (
                     <tr>
-                      <td className="empty-row" colSpan={8}>
+                      <td className="empty-row" colSpan={7}>
                         No candidates found
                       </td>
                     </tr>
                   )}
                   {candidates.map((candidate) => (
                     <tr key={candidate.id}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={selectedCandidateIds.has(candidate.id)}
-                          onChange={() => toggleCandidate(candidate.id)}
-                          disabled={candidate.status !== "active"}
-                        />
-                      </td>
                       <td>{candidate.name}</td>
                       <td>{candidate.email}</td>
                       <td>{candidate.location || "-"}</td>
@@ -937,11 +935,6 @@ export function App() {
                           onClick={() =>
                             run(async () => {
                               await api.deleteCandidate(candidate.id);
-                              setSelectedCandidateIds((current) => {
-                                const next = new Set(current);
-                                next.delete(candidate.id);
-                                return next;
-                              });
                               await loadApp();
                             }, {
                               action: "delete",
@@ -1059,35 +1052,22 @@ export function App() {
             <button
               type="button"
               className="primary-button"
-              onClick={() => queueCampaign(true)}
-              disabled={!selectedTemplateId || selectedCount === 0 || busy}
-            >
-              {activeAction === "schedule" ? (
-                <RefreshCw className="spin" size={16} />
-              ) : (
-                <Send size={16} />
-              )}
-              {activeAction === "schedule" ? "Scheduling" : "Schedule Selected"}
-            </button>
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => queueCampaign(false)}
+              onClick={planToday}
               disabled={!selectedTemplateId || busy}
             >
-              {activeAction === "schedule" ? (
+              {activeAction === "plan" ? (
                 <RefreshCw className="spin" size={16} />
               ) : (
-                <Plus size={16} />
+                <CalendarClock size={16} />
               )}
-              {activeAction === "schedule" ? "Scheduling" : "Schedule Active"}
+              {activeAction === "plan" ? "Planning" : "Plan Today"}
             </button>
           </section>
 
           <section className="table-panel">
             <div className="panel-toolbar">
               <h2>Email Activity</h2>
-              <span>{selectedCount} selected</span>
+              <span>{emails.length} records</span>
             </div>
             <div className="table-wrap">
               <table>

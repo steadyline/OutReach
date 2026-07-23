@@ -8,8 +8,10 @@ import {
   type DeliverySettings,
   isWithinWorkingWindow,
   localDateKey,
+  localMinutes,
   nextWorkingTime,
   nextWorkingTimeAfterGap,
+  parseTimeToMinutes,
   randomGapMinutes
 } from "./time.js";
 import { addTrackingAndFooter, renderVariables, textToHtml } from "./template.js";
@@ -40,6 +42,7 @@ type CandidateRow = {
   location: string | null;
   status: string;
   opened_at: Date | null;
+  created_at: Date;
 };
 
 type TemplateRow = {
@@ -83,6 +86,25 @@ type EmailJobRow = {
   sender_name: string | null;
   refresh_token_encrypted: string;
   sender_revoked_at: Date | null;
+};
+
+type FollowupSourceRow = {
+  candidate_id: string;
+  template_id: string;
+  sender_id: string;
+  sequence_step: number;
+  sent_at: Date;
+  gmail_thread_id: string | null;
+  candidate_opened_at: Date | null;
+  candidate_status: string;
+};
+
+type DailyPlanResult = {
+  queued: number;
+  followups: number;
+  initial: number;
+  skipped: number;
+  reason?: string;
 };
 
 function settingsFromRow(row: SettingsRow): SettingsRecord {
@@ -148,11 +170,115 @@ async function plannedCounts(userId: string, settings: DeliverySettings) {
   return counts;
 }
 
-export async function planSendTimes(userId: string, count: number) {
+async function plannedCountForLocalDay(
+  userId: string,
+  settings: DeliverySettings,
+  date: Date
+) {
+  const targetKey = localDateKey(date, settings.timezone);
+  const result = await query<{ planned_at: Date }>(
+    `
+      SELECT COALESCE(sent_at, scheduled_at) AS planned_at
+      FROM emails
+      WHERE user_id = $1
+        AND status IN ('queued', 'sent', 'opened')
+        AND COALESCE(sent_at, scheduled_at) >= now() - interval '48 hours'
+        AND COALESCE(sent_at, scheduled_at) <= now() + interval '24 hours'
+    `,
+    [userId]
+  );
+
+  return result.rows.filter((row) => localDateKey(row.planned_at, settings.timezone) === targetKey)
+    .length;
+}
+
+function isBlockedCandidateStatus(status: string) {
+  return ["suppressed", "bounced", "unsubscribed"].includes(status);
+}
+
+export async function refreshCandidateOutreachStatus(userId: string, candidateId: string) {
+  const candidate = await query<{ status: string; opened_at: Date | null }>(
+    "SELECT status, opened_at FROM candidates WHERE user_id = $1 AND id = $2",
+    [userId, candidateId]
+  );
+  const current = candidate.rows[0];
+  if (!current || isBlockedCandidateStatus(current.status)) {
+    return;
+  }
+
+  const queued = await query<{ id: string }>(
+    "SELECT id FROM emails WHERE user_id = $1 AND candidate_id = $2 AND status = 'queued' LIMIT 1",
+    [userId, candidateId]
+  );
+  if (queued.rows[0]) {
+    await query("UPDATE candidates SET status = 'scheduled', updated_at = now() WHERE id = $1", [
+      candidateId
+    ]);
+    return;
+  }
+
+  if (current.opened_at) {
+    await query("UPDATE candidates SET status = 'opened', updated_at = now() WHERE id = $1", [
+      candidateId
+    ]);
+    return;
+  }
+
+  const sent = await query<{ id: string }>(
+    `
+      SELECT id
+      FROM emails
+      WHERE user_id = $1
+        AND candidate_id = $2
+        AND status IN ('sent', 'opened')
+      LIMIT 1
+    `,
+    [userId, candidateId]
+  );
+  if (sent.rows[0]) {
+    await query("UPDATE candidates SET status = 'sent', updated_at = now() WHERE id = $1", [
+      candidateId
+    ]);
+    return;
+  }
+
+  const failed = await query<{ id: string }>(
+    `
+      SELECT id
+      FROM emails
+      WHERE user_id = $1
+        AND candidate_id = $2
+        AND status = 'failed'
+      LIMIT 1
+    `,
+    [userId, candidateId]
+  );
+  await query("UPDATE candidates SET status = $2, updated_at = now() WHERE id = $1", [
+    candidateId,
+    failed.rows[0] ? "failed" : "active"
+  ]);
+}
+
+async function markCandidatesScheduled(candidateIds: string[]) {
+  if (!candidateIds.length) {
+    return;
+  }
+  await query(
+    `
+      UPDATE candidates
+      SET status = 'scheduled', updated_at = now()
+      WHERE id = ANY($1::text[])
+        AND status NOT IN ('suppressed', 'bounced', 'unsubscribed')
+    `,
+    [candidateIds]
+  );
+}
+
+export async function planSendTimes(userId: string, count: number, from = new Date()) {
   const settings = await ensureSettings(userId);
   const counts = await plannedCounts(userId, settings);
   const times: Date[] = [];
-  let cursor = nextWorkingTime(new Date(), settings);
+  let cursor = nextWorkingTime(from, settings);
 
   for (let index = 0; index < count; index += 1) {
     while ((counts.get(localDateKey(cursor, settings.timezone)) ?? 0) >= settings.dailyLimit) {
@@ -209,7 +335,7 @@ export async function queueInitialEmails(input: {
       LEFT JOIN suppressions s
         ON s.user_id = c.user_id AND lower(s.email) = lower(c.email)
       WHERE c.user_id = $1
-        AND c.status = 'active'
+        AND c.status IN ('active', 'failed')
         AND s.id IS NULL
         ${candidateFilter}
         AND NOT EXISTS (
@@ -228,6 +354,7 @@ export async function queueInitialEmails(input: {
 
   const times = await planSendTimes(input.userId, candidates.rows.length);
 
+  const queuedCandidateIds: string[] = [];
   for (let index = 0; index < candidates.rows.length; index += 1) {
     await query(
       `
@@ -247,12 +374,256 @@ export async function queueInitialEmails(input: {
         randomUUID()
       ]
     );
+    queuedCandidateIds.push(candidates.rows[index].id);
   }
+  await markCandidatesScheduled(queuedCandidateIds);
 
   return {
     queued: candidates.rows.length,
     skipped: Math.max((input.candidateIds?.length ?? candidates.rows.length) - candidates.rows.length, 0)
   };
+}
+
+function shouldCreateDailyPlan(now: Date, settings: DeliverySettings) {
+  const current = localMinutes(now, settings.timezone);
+  const start = parseTimeToMinutes(settings.startTime);
+  const end = parseTimeToMinutes(settings.endTime);
+
+  if (start === end) {
+    return true;
+  }
+  if (start < end) {
+    return current >= start && current <= end;
+  }
+  return current >= start || current <= end;
+}
+
+async function reserveDailyPlan(userId: string, localDate: string) {
+  const result = await query<{ user_id: string }>(
+    `
+      INSERT INTO daily_plans (user_id, local_date)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id, local_date) DO NOTHING
+      RETURNING user_id
+    `,
+    [userId, localDate]
+  );
+  return Boolean(result.rows[0]);
+}
+
+async function activeSender(userId: string) {
+  const sender = await query<SenderRow>(
+    `
+      SELECT *
+      FROM senders
+      WHERE user_id = $1 AND revoked_at IS NULL
+      ORDER BY connected_at DESC
+      LIMIT 1
+    `,
+    [userId]
+  );
+  return sender.rows[0] ?? null;
+}
+
+async function primaryTemplate(userId: string) {
+  const template = await query<TemplateRow>(
+    "SELECT * FROM templates WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+    [userId]
+  );
+  return template.rows[0] ?? null;
+}
+
+function followupDueAt(sentAt: Date, nextStep: number, settings: DeliverySettings) {
+  return addDays(
+    sentAt,
+    nextStep === 1 ? settings.followupAfterDays : settings.secondFollowupAfterDays
+  );
+}
+
+async function dueFollowupSources(userId: string, settings: SettingsRecord, now: Date) {
+  const result = await query<FollowupSourceRow>(
+    `
+      SELECT DISTINCT ON (e.candidate_id)
+        e.candidate_id,
+        e.template_id,
+        e.sender_id,
+        e.sequence_step,
+        e.sent_at,
+        e.gmail_thread_id,
+        c.opened_at AS candidate_opened_at,
+        c.status AS candidate_status
+      FROM emails e
+      JOIN candidates c ON c.id = e.candidate_id
+      WHERE e.user_id = $1
+        AND e.status IN ('sent', 'opened')
+        AND e.sent_at IS NOT NULL
+        AND c.status NOT IN ('suppressed', 'bounced', 'unsubscribed')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM emails queued
+          WHERE queued.user_id = e.user_id
+            AND queued.candidate_id = e.candidate_id
+            AND queued.status = 'queued'
+        )
+      ORDER BY e.candidate_id, e.sequence_step DESC, e.sent_at DESC
+    `,
+    [userId]
+  );
+
+  return result.rows
+    .map((row) => {
+      const nextStep = row.sequence_step + 1;
+      return {
+        ...row,
+        nextStep,
+        dueAt: followupDueAt(row.sent_at, nextStep, settings)
+      };
+    })
+    .filter((row) => row.nextStep <= settings.maxFollowups)
+    .filter((row) => !(settings.stopOnOpen && row.candidate_opened_at))
+    .filter((row) => row.dueAt <= now)
+    .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime());
+}
+
+async function initialCandidates(userId: string, limit: number) {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const result = await query<CandidateRow>(
+    `
+      SELECT c.*
+      FROM candidates c
+      LEFT JOIN suppressions s
+        ON s.user_id = c.user_id AND lower(s.email) = lower(c.email)
+      WHERE c.user_id = $1
+        AND c.status IN ('active', 'failed')
+        AND s.id IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM emails e
+          WHERE e.candidate_id = c.id
+            AND e.sequence_step = 0
+            AND e.status IN ('queued', 'sent', 'opened')
+        )
+      ORDER BY c.created_at ASC
+      LIMIT $2
+    `,
+    [userId, limit]
+  );
+
+  return result.rows;
+}
+
+export async function autoPlanToday(userId: string, force = false): Promise<DailyPlanResult> {
+  const settings = await ensureSettings(userId);
+  const now = new Date();
+  if (!force && !shouldCreateDailyPlan(now, settings)) {
+    return { queued: 0, followups: 0, initial: 0, skipped: 0, reason: "outside_window" };
+  }
+
+  const localDate = localDateKey(now, settings.timezone);
+  const sender = await activeSender(userId);
+  if (!sender) {
+    return { queued: 0, followups: 0, initial: 0, skipped: 0, reason: "missing_sender" };
+  }
+
+  const template = await primaryTemplate(userId);
+  if (!template) {
+    return { queued: 0, followups: 0, initial: 0, skipped: 0, reason: "missing_template" };
+  }
+
+  if (!force && !(await reserveDailyPlan(userId, localDate))) {
+    return { queued: 0, followups: 0, initial: 0, skipped: 0, reason: "already_planned" };
+  }
+
+  const plannedToday = await plannedCountForLocalDay(userId, settings, now);
+  const capacity = Math.max(0, settings.dailyLimit - plannedToday);
+  if (capacity === 0) {
+    return { queued: 0, followups: 0, initial: 0, skipped: 0, reason: "daily_limit_reached" };
+  }
+
+  const followups = (await dueFollowupSources(userId, settings, now)).slice(0, capacity);
+  const initial = await initialCandidates(userId, capacity - followups.length);
+  const total = followups.length + initial.length;
+  const times = await planSendTimes(userId, total, addMinutes(now, settings.minGapMinutes));
+  const scheduledCandidateIds: string[] = [];
+
+  for (let index = 0; index < followups.length; index += 1) {
+    const source = followups[index];
+    await query(
+      `
+        INSERT INTO emails (
+          id, user_id, candidate_id, template_id, sender_id, type, sequence_step,
+          status, scheduled_at, tracking_token, gmail_thread_id
+        )
+        VALUES ($1, $2, $3, $4, $5, 'followup', $6, 'queued', $7, $8, $9)
+      `,
+      [
+        randomUUID(),
+        userId,
+        source.candidate_id,
+        source.template_id,
+        source.sender_id,
+        source.nextStep,
+        times[index],
+        randomUUID(),
+        source.gmail_thread_id
+      ]
+    );
+    scheduledCandidateIds.push(source.candidate_id);
+  }
+
+  for (let index = 0; index < initial.length; index += 1) {
+    const candidate = initial[index];
+    await query(
+      `
+        INSERT INTO emails (
+          id, user_id, candidate_id, template_id, sender_id, type, sequence_step,
+          status, scheduled_at, tracking_token
+        )
+        VALUES ($1, $2, $3, $4, $5, 'initial', 0, 'queued', $6, $7)
+      `,
+      [
+        randomUUID(),
+        userId,
+        candidate.id,
+        template.id,
+        sender.id,
+        times[followups.length + index],
+        randomUUID()
+      ]
+    );
+    scheduledCandidateIds.push(candidate.id);
+  }
+
+  await markCandidatesScheduled(scheduledCandidateIds);
+
+  return {
+    queued: total,
+    followups: followups.length,
+    initial: initial.length,
+    skipped: Math.max(0, capacity - total)
+  };
+}
+
+export async function processDailyPlans() {
+  const users = await query<{ user_id: string }>(
+    `
+      SELECT DISTINCT s.user_id
+      FROM senders s
+      JOIN templates t ON t.user_id = s.user_id
+      WHERE s.revoked_at IS NULL
+    `
+  );
+
+  for (const row of users.rows) {
+    try {
+      await autoPlanToday(row.user_id);
+    } catch (error) {
+      console.error(`Daily plan failed for ${row.user_id}`, error);
+    }
+  }
 }
 
 function defaultFollowupBody() {
@@ -323,6 +694,10 @@ async function cancelEmail(emailId: string, reason: string) {
 }
 
 function transientDelayMinutes(error: unknown) {
+  if (/insufficient authentication scopes/i.test(errorMessage(error))) {
+    return 0;
+  }
+
   const code =
     Number((error as { code?: number }).code) ||
     Number((error as { response?: { status?: number } }).response?.status);
@@ -343,53 +718,24 @@ function errorMessage(error: unknown) {
   return "Unknown delivery error";
 }
 
-async function scheduleNextFollowup(job: EmailJobRow, settings: SettingsRecord, threadId: string | null) {
-  if (job.sequence_step >= settings.maxFollowups) {
-    return;
-  }
-
-  const nextStep = job.sequence_step + 1;
-  const delayDays =
-    nextStep === 1 ? settings.followupAfterDays : settings.secondFollowupAfterDays;
-  const scheduledAt = nextWorkingTime(addDays(new Date(), delayDays), settings);
-
-  await query(
-    `
-      INSERT INTO emails (
-        id, user_id, candidate_id, template_id, sender_id, type, sequence_step,
-        status, scheduled_at, tracking_token, gmail_thread_id
-      )
-      VALUES ($1, $2, $3, $4, $5, 'followup', $6, 'queued', $7, $8, $9)
-    `,
-    [
-      randomUUID(),
-      job.user_id,
-      job.candidate_id,
-      job.template_id,
-      job.sender_id,
-      nextStep,
-      scheduledAt,
-      randomUUID(),
-      threadId
-    ]
-  );
-}
-
 async function processEmail(job: EmailJobRow) {
   const settings = await ensureSettings(job.user_id);
 
   if (job.sender_revoked_at) {
     await cancelEmail(job.id, "Gmail sender is disconnected");
+    await refreshCandidateOutreachStatus(job.user_id, job.candidate_id);
     return;
   }
 
-  if (job.candidate_status !== "active") {
+  if (isBlockedCandidateStatus(job.candidate_status)) {
     await cancelEmail(job.id, `Candidate is ${job.candidate_status}`);
+    await refreshCandidateOutreachStatus(job.user_id, job.candidate_id);
     return;
   }
 
   if (settings.stopOnOpen && job.candidate_opened_at) {
     await cancelEmail(job.id, "Candidate opened a previous email");
+    await refreshCandidateOutreachStatus(job.user_id, job.candidate_id);
     return;
   }
 
@@ -470,13 +816,13 @@ async function processEmail(job: EmailJobRow) {
     await query(
       `
         UPDATE candidates
-        SET last_contacted_at = now(), updated_at = now()
+        SET last_contacted_at = now(), status = 'sent', updated_at = now()
         WHERE id = $1
       `,
       [job.candidate_id]
     );
 
-    await scheduleNextFollowup(job, settings, gmail.threadId);
+    await refreshCandidateOutreachStatus(job.user_id, job.candidate_id);
   } catch (error) {
     const delay = transientDelayMinutes(error);
     if (delay > 0) {
@@ -494,6 +840,16 @@ async function processEmail(job: EmailJobRow) {
         WHERE id = $1
       `,
       [job.id, errorMessage(error)]
+    );
+
+    await query(
+      `
+        UPDATE candidates
+        SET status = 'failed', updated_at = now()
+        WHERE id = $1
+          AND status NOT IN ('suppressed', 'bounced', 'unsubscribed')
+      `,
+      [job.candidate_id]
     );
   }
 }
@@ -544,6 +900,7 @@ export function startDeliveryWorker() {
     }
     running = true;
     try {
+      await processDailyPlans();
       await processDueEmails();
     } catch (error) {
       console.error("Delivery worker failed", error);
@@ -556,4 +913,3 @@ export function startDeliveryWorker() {
   setTimeout(tick, 5_000);
   return () => clearInterval(interval);
 }
-

@@ -14,7 +14,12 @@ import {
 import { config } from "./config.js";
 import { encryptSecret } from "./crypto.js";
 import { query } from "./db.js";
-import { ensureSettings, queueInitialEmails } from "./delivery.js";
+import {
+  autoPlanToday,
+  ensureSettings,
+  queueInitialEmails,
+  refreshCandidateOutreachStatus
+} from "./delivery.js";
 import { createOAuthClient, gmailScopes } from "./gmail.js";
 
 const router = express.Router();
@@ -53,7 +58,9 @@ const candidateSchema = z.object({
 });
 
 const candidateUpdateSchema = candidateSchema.partial().extend({
-  status: z.enum(["active", "suppressed", "bounced", "unsubscribed"]).optional()
+  status: z
+    .enum(["active", "scheduled", "sent", "opened", "failed", "suppressed", "bounced", "unsubscribed"])
+    .optional()
 });
 
 const candidateImportSchema = z.object({
@@ -103,7 +110,7 @@ router.get("/auth/google", (req, res) => {
   const oauth = createOAuthClient();
   const url = oauth.generateAuthUrl({
     access_type: "offline",
-    prompt: "consent",
+    prompt: "consent select_account",
     scope: gmailScopes,
     state,
     include_granted_scopes: true
@@ -159,14 +166,29 @@ router.get(
       [uid, googleSub, email, profile.data.name ?? null, profile.data.picture ?? null]
     );
 
-    const existingSender = await query<{ refresh_token_encrypted: string }>(
-      "SELECT refresh_token_encrypted FROM senders WHERE user_id = $1 AND email = $2",
+    const grantedScope = tokens.scope ?? gmailScopes.join(" ");
+    if (!grantedScope.includes("https://www.googleapis.com/auth/gmail.send")) {
+      res.redirect(`${config.frontendUrl}?auth_error=missing_gmail_send_scope`);
+      return;
+    }
+
+    const existingSender = await query<{ refresh_token_encrypted: string; scope: string | null }>(
+      "SELECT refresh_token_encrypted, scope FROM senders WHERE user_id = $1 AND email = $2",
       [uid, email]
     );
     const refreshToken = tokens.refresh_token;
 
     if (!refreshToken && !existingSender.rows[0]) {
       res.redirect(`${config.frontendUrl}?auth_error=missing_refresh_token`);
+      return;
+    }
+
+    if (
+      !refreshToken &&
+      existingSender.rows[0] &&
+      !existingSender.rows[0].scope?.includes("https://www.googleapis.com/auth/gmail.send")
+    ) {
+      res.redirect(`${config.frontendUrl}?auth_error=reconnect_gmail_send_scope`);
       return;
     }
 
@@ -200,7 +222,7 @@ router.get(
         refreshTokenEncrypted,
         tokens.access_token ? encryptSecret(tokens.access_token) : null,
         tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-        tokens.scope ?? gmailScopes.join(" ")
+        grantedScope || gmailScopes.join(" ")
       ]
     );
 
@@ -658,6 +680,14 @@ router.post(
   })
 );
 
+router.post(
+  "/campaigns/plan-today",
+  asyncRoute(async (req, res) => {
+    const result = await autoPlanToday(userId(req), true);
+    res.status(201).json(result);
+  })
+);
+
 router.get(
   "/emails",
   asyncRoute(async (req, res) => {
@@ -683,7 +713,7 @@ router.get(
 router.post(
   "/emails/:id/cancel",
   asyncRoute(async (req, res) => {
-    const result = await query(
+    const result = await query<{ candidate_id: string }>(
       `
         UPDATE emails
         SET status = 'cancelled',
@@ -698,6 +728,7 @@ router.post(
       res.status(404).json({ error: "Queued email not found" });
       return;
     }
+    await refreshCandidateOutreachStatus(userId(req), result.rows[0].candidate_id);
     res.json(result.rows[0]);
   })
 );
@@ -705,14 +736,15 @@ router.post(
 router.delete(
   "/emails/:id",
   asyncRoute(async (req, res) => {
-    const result = await query<{ id: string }>(
-      "DELETE FROM emails WHERE user_id = $1 AND id = $2 RETURNING id",
+    const result = await query<{ id: string; candidate_id: string }>(
+      "DELETE FROM emails WHERE user_id = $1 AND id = $2 RETURNING id, candidate_id",
       [userId(req), req.params.id]
     );
     if (!result.rows[0]) {
       res.status(404).json({ error: "Email activity not found" });
       return;
     }
+    await refreshCandidateOutreachStatus(userId(req), result.rows[0].candidate_id);
     res.status(204).end();
   })
 );
@@ -771,6 +803,7 @@ export async function handleOpenToken(token: string) {
       SET opened_at = COALESCE(opened_at, now()),
           last_opened_at = now(),
           open_count = open_count + 1,
+          status = 'opened',
           updated_at = now()
       WHERE id = $1
     `,

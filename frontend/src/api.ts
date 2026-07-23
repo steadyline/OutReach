@@ -76,6 +76,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body)
     }),
+  planToday: () =>
+    request<{ queued: number; followups: number; initial: number; skipped: number; reason?: string }>(
+      "/campaigns/plan-today",
+      { method: "POST" }
+    ),
   emails: () => request<EmailLog[]>("/emails"),
   cancelEmail: (id: string) => request<EmailLog>(`/emails/${id}/cancel`, { method: "POST" }),
   deleteEmail: (id: string) => request<void>(`/emails/${id}`, { method: "DELETE" }),

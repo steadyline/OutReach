@@ -544,6 +544,7 @@ button:disabled {
   background: var(--green-soft);
   font-size: 12px;
   font-weight: 700;
+  text-decoration: none;
   white-space: nowrap;
 }
 
@@ -905,7 +906,8 @@ td strong {
   background: var(--green-soft);
 }
 
-.pill.queued {
+.pill.queued,
+.pill.scheduled {
   color: #175cd3;
   background: var(--blue-soft);
 }

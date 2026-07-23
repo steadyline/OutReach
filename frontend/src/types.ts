@@ -12,7 +12,15 @@ export type Candidate = {
   name: string;
   email: string;
   location: string | null;
-  status: "active" | "suppressed" | "bounced" | "unsubscribed";
+  status:
+    | "active"
+    | "scheduled"
+    | "sent"
+    | "opened"
+    | "failed"
+    | "suppressed"
+    | "bounced"
+    | "unsubscribed";
   opened_at: string | null;
   last_opened_at: string | null;
   open_count: number;
@@ -64,4 +72,3 @@ export type Stats = {
   emails: Record<string, number>;
   candidates: Record<string, number>;
 };
-

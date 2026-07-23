@@ -106,6 +106,13 @@ export async function runMigrations() {
       UNIQUE(user_id, email)
     );
 
+    CREATE TABLE IF NOT EXISTS daily_plans (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      local_date TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, local_date)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_candidates_user_email ON candidates(user_id, email);
     CREATE INDEX IF NOT EXISTS idx_candidates_user_status ON candidates(user_id, status);
     CREATE INDEX IF NOT EXISTS idx_emails_due ON emails(status, scheduled_at);
@@ -130,4 +137,3 @@ if (isDirectRun) {
       process.exit(1);
     });
 }
-
