@@ -517,7 +517,6 @@ button:disabled {
 
 .top-actions,
 .button-row,
-.actions-cell,
 .panel-toolbar {
   display: flex;
   align-items: center;
@@ -920,13 +919,9 @@ td strong {
   font-size: 12px;
 }
 
-.actions-cell {
-  justify-content: flex-end;
-  white-space: nowrap;
-}
-
 .candidate-actions {
   min-width: 174px;
+  white-space: nowrap;
 }
 
 .actions-header {
@@ -937,6 +932,20 @@ td strong {
 .activity-actions {
   width: 104px;
   min-width: 104px;
+  white-space: nowrap;
+}
+
+.action-stack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.candidate-action-stack {
+  justify-content: flex-end;
+}
+
+.activity-action-stack {
   justify-content: center;
 }
 

@@ -1174,59 +1174,61 @@ export function App() {
                       <td>{candidate.open_count ? `${candidate.open_count}x` : "No"}</td>
                       <td>{formatDate(candidate.last_contacted_at)}</td>
                       <td className="actions-cell candidate-actions">
-                        {isEditing ? (
-                          <>
-                            <button
-                              className="row-action primary"
-                              type="button"
-                              disabled={busy}
-                              onClick={() => saveCandidateEdit(candidate.id)}
-                            >
-                              {isUpdating ? (
-                                <RefreshCw className="spin" size={14} />
-                              ) : (
-                                <Save size={14} />
-                              )}
-                              {isUpdating ? "Updating" : "Update"}
-                            </button>
-                            <button
-                              className="row-action"
-                              type="button"
-                              disabled={busy}
-                              onClick={cancelCandidateEdit}
-                            >
-                              <X size={14} />
-                              Cancel
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <IconButton
-                              title="Edit"
-                              disabled={busy}
-                              onClick={() => startCandidateEdit(candidate)}
-                            >
-                              <Edit3 size={15} />
-                            </IconButton>
-                            <IconButton
-                              title="Delete"
-                              tone="danger"
-                              disabled={busy}
-                              onClick={() =>
-                                run(async () => {
-                                  await api.deleteCandidate(candidate.id);
-                                  await loadApp();
-                                }, {
-                                  action: "delete",
-                                  loading: "Deleting candidate...",
-                                  success: "Candidate deleted"
-                                })
-                              }
-                            >
-                              <Trash2 size={15} />
-                            </IconButton>
-                          </>
-                        )}
+                        <div className="action-stack candidate-action-stack">
+                          {isEditing ? (
+                            <>
+                              <button
+                                className="row-action primary"
+                                type="button"
+                                disabled={busy}
+                                onClick={() => saveCandidateEdit(candidate.id)}
+                              >
+                                {isUpdating ? (
+                                  <RefreshCw className="spin" size={14} />
+                                ) : (
+                                  <Save size={14} />
+                                )}
+                                {isUpdating ? "Updating" : "Update"}
+                              </button>
+                              <button
+                                className="row-action"
+                                type="button"
+                                disabled={busy}
+                                onClick={cancelCandidateEdit}
+                              >
+                                <X size={14} />
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <IconButton
+                                title="Edit"
+                                disabled={busy}
+                                onClick={() => startCandidateEdit(candidate)}
+                              >
+                                <Edit3 size={15} />
+                              </IconButton>
+                              <IconButton
+                                title="Delete"
+                                tone="danger"
+                                disabled={busy}
+                                onClick={() =>
+                                  run(async () => {
+                                    await api.deleteCandidate(candidate.id);
+                                    await loadApp();
+                                  }, {
+                                    action: "delete",
+                                    loading: "Deleting candidate...",
+                                    success: "Candidate deleted"
+                                  })
+                                }
+                              >
+                                <Trash2 size={15} />
+                              </IconButton>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                     );
@@ -1413,43 +1415,45 @@ export function App() {
                       <td>{formatDate(email.sent_at)}</td>
                       <td>{formatDate(email.opened_at)}</td>
                       <td className="actions-cell activity-actions">
-                        <IconButton
-                          title={email.status === "queued" ? "Cancel send" : "Only scheduled emails can be cancelled"}
-                          disabled={email.status !== "queued"}
-                          onClick={() =>
-                            run(async () => {
-                              await api.cancelEmail(email.id);
-                              await loadApp();
-                            }, {
-                              action: "cancel",
-                              loading: "Cancelling scheduled email...",
-                              success: "Scheduled email cancelled"
-                            })
-                          }
-                        >
-                          <Ban size={15} />
-                        </IconButton>
-                        <IconButton
-                          title="Delete activity"
-                          tone="danger"
-                          disabled={activeAction === "deleteEmail"}
-                          onClick={() =>
-                            run(async () => {
-                              await api.deleteEmail(email.id);
-                              await loadApp();
-                            }, {
-                              action: "deleteEmail",
-                              loading: "Deleting activity...",
-                              success: "Activity deleted"
-                            })
-                          }
-                        >
-                          {activeAction === "deleteEmail" ? (
-                            <RefreshCw className="spin" size={15} />
-                          ) : (
-                            <Trash2 size={15} />
-                          )}
-                        </IconButton>
+                        <div className="action-stack activity-action-stack">
+                          <IconButton
+                            title={email.status === "queued" ? "Cancel send" : "Only scheduled emails can be cancelled"}
+                            disabled={email.status !== "queued"}
+                            onClick={() =>
+                              run(async () => {
+                                await api.cancelEmail(email.id);
+                                await loadApp();
+                              }, {
+                                action: "cancel",
+                                loading: "Cancelling scheduled email...",
+                                success: "Scheduled email cancelled"
+                              })
+                            }
+                          >
+                            <Ban size={15} />
+                          </IconButton>
+                          <IconButton
+                            title="Delete activity"
+                            tone="danger"
+                            disabled={activeAction === "deleteEmail"}
+                            onClick={() =>
+                              run(async () => {
+                                await api.deleteEmail(email.id);
+                                await loadApp();
+                              }, {
+                                action: "deleteEmail",
+                                loading: "Deleting activity...",
+                                success: "Activity deleted"
+                              })
+                            }
+                          >
+                            {activeAction === "deleteEmail" ? (
+                              <RefreshCw className="spin" size={15} />
+                            ) : (
+                              <Trash2 size={15} />
+                            )}
+                          </IconButton>
+                        </div>
                       </td>
                     </tr>
                   ))}
