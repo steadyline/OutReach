@@ -810,6 +810,17 @@ router.post(
 router.get(
   "/emails",
   asyncRoute(async (req, res) => {
+    const requestedPage = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(5, Number(req.query.pageSize) || 10));
+    const countResult = await query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM emails WHERE user_id = $1",
+      [userId(req)]
+    );
+    const total = Number(countResult.rows[0]?.count ?? 0);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
+
     const result = await query(
       `
         SELECT e.*,
@@ -820,12 +831,19 @@ router.get(
         JOIN candidates c ON c.id = e.candidate_id
         JOIN templates t ON t.id = e.template_id
         WHERE e.user_id = $1
-        ORDER BY e.scheduled_at DESC
-        LIMIT 250
+        ORDER BY e.scheduled_at ASC, e.created_at ASC, e.id ASC
+        LIMIT $2
+        OFFSET $3
       `,
-      [userId(req)]
+      [userId(req), pageSize, offset]
     );
-    res.json(result.rows);
+    res.json({
+      data: result.rows,
+      page,
+      pageSize,
+      total,
+      totalPages
+    });
   })
 );
 

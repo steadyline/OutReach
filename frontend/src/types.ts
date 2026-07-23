@@ -76,6 +76,14 @@ export type EmailLog = {
   subject: string | null;
 };
 
+export type EmailPage = {
+  data: EmailLog[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 export type Stats = {
   emails: Record<string, number>;
   candidates: Record<string, number>;

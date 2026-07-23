@@ -1,4 +1,13 @@
-import type { Candidate, CandidatePage, EmailLog, Settings, Stats, Template, User } from "./types";
+import type {
+  Candidate,
+  CandidatePage,
+  EmailLog,
+  EmailPage,
+  Settings,
+  Stats,
+  Template,
+  User
+} from "./types";
 
 export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
@@ -95,7 +104,14 @@ export const api = {
       "/campaigns/plan-today",
       { method: "POST" }
     ),
-  emails: () => request<EmailLog[]>("/emails"),
+  emails: ({
+    page = 1,
+    pageSize = 10
+  }: {
+    page?: number;
+    pageSize?: number;
+  } = {}) =>
+    request<EmailPage>(`/emails?page=${encodeURIComponent(page)}&pageSize=${encodeURIComponent(pageSize)}`),
   cancelEmail: (id: string) => request<EmailLog>(`/emails/${id}/cancel`, { method: "POST" }),
   deleteEmail: (id: string) => request<void>(`/emails/${id}`, { method: "DELETE" }),
   stats: () => request<Stats>("/stats")

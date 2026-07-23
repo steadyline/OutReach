@@ -70,6 +70,12 @@ const defaultCandidatePagination = {
   total: 0,
   totalPages: 1
 };
+const defaultEmailPagination = {
+  page: 1,
+  pageSize: 10,
+  total: 0,
+  totalPages: 1
+};
 const emptyTemplate: TemplateForm = {
   name: "",
   subject: "",
@@ -327,6 +333,7 @@ export function App() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [candidatePagination, setCandidatePagination] = useState(defaultCandidatePagination);
   const [emails, setEmails] = useState<EmailLog[]>([]);
+  const [emailPagination, setEmailPagination] = useState(defaultEmailPagination);
   const [settings, setSettings] = useState<Settings>(fallbackSettings);
   const [stats, setStats] = useState<Stats>({ emails: {}, candidates: {} });
 
@@ -378,9 +385,11 @@ export function App() {
     searchValue = search,
     pageValue = candidatePagination.page,
     pageSizeValue = candidatePagination.pageSize,
-    sortValue = candidateSort
+    sortValue = candidateSort,
+    emailPageValue = emailPagination.page,
+    emailPageSizeValue = emailPagination.pageSize
   ) {
-    const [candidatePageData, templateData, emailData, settingsData, statsData] = await Promise.all([
+    const [candidatePageData, templateData, emailPageData, settingsData, statsData] = await Promise.all([
       api.candidates({
         search: searchValue,
         page: pageValue,
@@ -388,7 +397,7 @@ export function App() {
         sort: sortValue
       }),
       api.templates(),
-      api.emails(),
+      api.emails({ page: emailPageValue, pageSize: emailPageSizeValue }),
       api.settings(),
       api.stats()
     ]);
@@ -399,7 +408,13 @@ export function App() {
       total: candidatePageData.total,
       totalPages: candidatePageData.totalPages
     });
-    setEmails(emailData);
+    setEmails(emailPageData.data);
+    setEmailPagination({
+      page: emailPageData.page,
+      pageSize: emailPageData.pageSize,
+      total: emailPageData.total,
+      totalPages: emailPageData.totalPages
+    });
     setSettings(settingsData);
     setStats(statsData);
     const primaryTemplate = templateData[0];
@@ -445,7 +460,9 @@ export function App() {
         search,
         candidatePagination.page,
         candidatePagination.pageSize,
-        candidateSort
+        candidateSort,
+        emailPagination.page,
+        emailPagination.pageSize
       );
     }, 8_000);
 
@@ -454,6 +471,8 @@ export function App() {
     candidatePagination.page,
     candidatePagination.pageSize,
     candidateSort,
+    emailPagination.page,
+    emailPagination.pageSize,
     hasQueuedEmails,
     search,
     user
@@ -577,7 +596,14 @@ export function App() {
 
     await run(async () => {
       const result = await api.planToday();
-      await loadApp();
+      await loadApp(
+        search,
+        candidatePagination.page,
+        candidatePagination.pageSize,
+        candidateSort,
+        1,
+        emailPagination.pageSize
+      );
       setView("queue");
       return result;
     }, {
@@ -677,6 +703,47 @@ export function App() {
     });
   }
 
+  async function changeEmailPage(page: number) {
+    const nextPage = Math.min(Math.max(1, page), emailPagination.totalPages);
+    if (nextPage === emailPagination.page) {
+      return;
+    }
+
+    await run(async () => {
+      await loadApp(
+        search,
+        candidatePagination.page,
+        candidatePagination.pageSize,
+        candidateSort,
+        nextPage,
+        emailPagination.pageSize
+      );
+    }, {
+      action: "page"
+    });
+  }
+
+  async function changeEmailPageSize(event: ChangeEvent<HTMLSelectElement>) {
+    const nextPageSize = Number(event.target.value);
+    setEmailPagination((current) => ({
+      ...current,
+      page: 1,
+      pageSize: nextPageSize
+    }));
+    await run(async () => {
+      await loadApp(
+        search,
+        candidatePagination.page,
+        candidatePagination.pageSize,
+        candidateSort,
+        1,
+        nextPageSize
+      );
+    }, {
+      action: "page"
+    });
+  }
+
   async function logout() {
     await run(async () => {
       await api.logout();
@@ -684,6 +751,7 @@ export function App() {
       setCandidates([]);
       setCandidatePagination(defaultCandidatePagination);
       setEmails([]);
+      setEmailPagination(defaultEmailPagination);
     }, {
       action: "logout",
       loading: "Signing out..."
@@ -789,6 +857,14 @@ export function App() {
   const candidateRangeEnd = Math.min(
     candidatePagination.total,
     candidatePagination.page * candidatePagination.pageSize
+  );
+  const emailRangeStart =
+    emailPagination.total === 0
+      ? 0
+      : (emailPagination.page - 1) * emailPagination.pageSize + 1;
+  const emailRangeEnd = Math.min(
+    emailPagination.total,
+    emailPagination.page * emailPagination.pageSize
   );
 
   return (
@@ -1298,7 +1374,7 @@ export function App() {
           <section className="table-panel">
             <div className="panel-toolbar">
               <h2>Email Activity</h2>
-              <span>{emails.length} records</span>
+              <span>Oldest first</span>
             </div>
             <div className="table-wrap">
               <table>
@@ -1379,6 +1455,50 @@ export function App() {
                   ))}
                 </tbody>
               </table>
+            </div>
+            <div className="pagination-bar">
+              <span>
+                {emailPagination.total === 0
+                  ? "0 records"
+                  : `${emailRangeStart}-${emailRangeEnd} of ${emailPagination.total}`}
+              </span>
+              <div className="pagination-controls">
+                <label>
+                  Rows
+                  <select
+                    value={emailPagination.pageSize}
+                    onChange={changeEmailPageSize}
+                    disabled={busy}
+                  >
+                    {[10, 25, 50, 100].map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="icon-button pagination-icon"
+                  type="button"
+                  title="Previous page"
+                  disabled={busy || emailPagination.page <= 1}
+                  onClick={() => changeEmailPage(emailPagination.page - 1)}
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                <span className="page-count">
+                  Page {emailPagination.page} of {emailPagination.totalPages}
+                </span>
+                <button
+                  className="icon-button pagination-icon"
+                  type="button"
+                  title="Next page"
+                  disabled={busy || emailPagination.page >= emailPagination.totalPages}
+                  onClick={() => changeEmailPage(emailPagination.page + 1)}
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
             </div>
           </section>
         </section>
