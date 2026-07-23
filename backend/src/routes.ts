@@ -877,13 +877,13 @@ function openIgnoreReason(input: {
     return "email_not_sent_yet";
   }
 
-  const ageMs = input.now.getTime() - input.sentAt.getTime();
-  if (ageMs < openConfirmationGraceMs) {
-    return "too_soon_after_send";
-  }
-
   if (input.source === "security_scanner" || input.source === "automated_client") {
     return input.source;
+  }
+
+  const ageMs = input.now.getTime() - input.sentAt.getTime();
+  if (input.source !== "gmail_image_proxy" && ageMs < openConfirmationGraceMs) {
+    return "too_soon_after_send";
   }
 
   return null;

@@ -134,6 +134,40 @@ export async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_emails_tracking_token ON emails(tracking_token);
     CREATE INDEX IF NOT EXISTS idx_email_open_events_email ON email_open_events(email_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_suppressions_user_email ON suppressions(user_id, email);
+
+    WITH recovered AS (
+      UPDATE emails e
+      SET status = 'opened',
+          opened_at = COALESCE(e.opened_at, ev.first_opened_at),
+          open_count = GREATEST(e.open_count, 1),
+          updated_at = now()
+      FROM (
+        SELECT email_id, min(occurred_at) AS first_opened_at
+        FROM email_open_events
+        WHERE ignored = true
+          AND ignore_reason = 'too_soon_after_send'
+          AND source = 'gmail_image_proxy'
+        GROUP BY email_id
+      ) ev
+      WHERE e.id = ev.email_id
+        AND e.status = 'sent'
+        AND e.sent_at IS NOT NULL
+      RETURNING e.candidate_id, e.opened_at
+    ),
+    candidate_recovered AS (
+      SELECT candidate_id, min(opened_at) AS first_opened_at, count(*)::integer AS open_count
+      FROM recovered
+      GROUP BY candidate_id
+    )
+    UPDATE candidates c
+    SET opened_at = COALESCE(c.opened_at, r.first_opened_at),
+        last_opened_at = r.first_opened_at,
+        open_count = GREATEST(c.open_count, r.open_count),
+        status = 'opened',
+        updated_at = now()
+    FROM candidate_recovered r
+    WHERE c.id = r.candidate_id
+      AND c.status NOT IN ('suppressed', 'bounced', 'unsubscribed');
   `);
 }
 
