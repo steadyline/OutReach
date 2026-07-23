@@ -354,6 +354,10 @@ export function App() {
     ],
     [stats]
   );
+  const hasQueuedEmails = useMemo(
+    () => emails.some((email) => email.status === "queued"),
+    [emails]
+  );
 
   async function loadApp(searchValue = search) {
     const [candidateData, templateData, emailData, settingsData, statsData] = await Promise.all([
@@ -399,6 +403,18 @@ export function App() {
   useEffect(() => {
     void refreshAuth();
   }, []);
+
+  useEffect(() => {
+    if (!user || !hasQueuedEmails) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadApp(search);
+    }, 8_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hasQueuedEmails, search, user]);
 
   async function run<T>(
     action: () => Promise<T>,
@@ -728,7 +744,7 @@ export function App() {
             <h1>{currentMeta.title}</h1>
           </div>
           <div className="top-actions">
-            <a className="connection-pill" href={api.authUrl} title="Reconnect Gmail">
+            <a className="connection-pill" href={`${api.authUrl}?reconnect=1`} title="Reconnect Gmail">
               <ShieldCheck size={15} />
               Gmail connected
             </a>

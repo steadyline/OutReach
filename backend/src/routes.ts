@@ -12,7 +12,7 @@ import {
   type AuthedRequest
 } from "./auth.js";
 import { config } from "./config.js";
-import { encryptSecret } from "./crypto.js";
+import { decryptSecret, encryptSecret } from "./crypto.js";
 import { query } from "./db.js";
 import {
   autoPlanToday,
@@ -20,7 +20,12 @@ import {
   queueInitialEmails,
   refreshCandidateOutreachStatus
 } from "./delivery.js";
-import { createOAuthClient, gmailScopes } from "./gmail.js";
+import {
+  createOAuthClient,
+  gmailScopes,
+  hasGmailSendScope,
+  refreshTokenHasGmailSendScope
+} from "./gmail.js";
 
 const router = express.Router();
 const oauthStateCookie = "reach_oauth_state";
@@ -49,6 +54,33 @@ function assertTimezone(timezone: string) {
 
 function userId(req: express.Request) {
   return (req as AuthedRequest).user.id;
+}
+
+async function revokeStoredSenderTokens(userIdValue: string) {
+  const senders = await query<{ id: string; refresh_token_encrypted: string }>(
+    `
+      SELECT id, refresh_token_encrypted
+      FROM senders
+      WHERE user_id = $1 AND revoked_at IS NULL
+    `,
+    [userIdValue]
+  );
+
+  for (const sender of senders.rows) {
+    try {
+      const oauth = createOAuthClient();
+      await oauth.revokeToken(decryptSecret(sender.refresh_token_encrypted));
+    } catch (error) {
+      console.warn(`Could not revoke Google token for sender ${sender.id}`, error);
+    }
+  }
+
+  if (senders.rows.length > 0) {
+    await query(
+      "UPDATE senders SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
+      [userIdValue]
+    );
+  }
 }
 
 const candidateSchema = z.object({
@@ -103,20 +135,30 @@ router.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/auth/google", (req, res) => {
-  const state = randomUUID();
-  res.cookie(oauthStateCookie, state, oauthCookieOptions());
+router.get(
+  "/auth/google",
+  asyncRoute(async (req, res) => {
+    if (String(req.query.reconnect ?? "") === "1") {
+      const session = await getSessionUser(req);
+      if (session) {
+        await revokeStoredSenderTokens(session.id);
+      }
+    }
 
-  const oauth = createOAuthClient();
-  const url = oauth.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent select_account",
-    scope: gmailScopes,
-    state,
-    include_granted_scopes: true
-  });
-  res.redirect(url);
-});
+    const state = randomUUID();
+    res.cookie(oauthStateCookie, state, oauthCookieOptions());
+
+    const oauth = createOAuthClient();
+    const url = oauth.generateAuthUrl({
+      access_type: "offline",
+      prompt: "consent select_account",
+      scope: gmailScopes,
+      state,
+      include_granted_scopes: true
+    });
+    res.redirect(url);
+  })
+);
 
 router.get(
   "/auth/google/callback",
@@ -167,34 +209,59 @@ router.get(
     );
 
     const grantedScope = tokens.scope ?? gmailScopes.join(" ");
-    if (!grantedScope.includes("https://www.googleapis.com/auth/gmail.send")) {
+    if (!hasGmailSendScope(grantedScope)) {
       res.redirect(`${config.frontendUrl}?auth_error=missing_gmail_send_scope`);
       return;
     }
 
     const existingSender = await query<{ refresh_token_encrypted: string; scope: string | null }>(
-      "SELECT refresh_token_encrypted, scope FROM senders WHERE user_id = $1 AND email = $2",
+      `
+        SELECT refresh_token_encrypted, scope
+        FROM senders
+        WHERE user_id = $1 AND email = $2 AND revoked_at IS NULL
+      `,
       [uid, email]
     );
-    const refreshToken = tokens.refresh_token;
+    const refreshToken = tokens.refresh_token ?? null;
+    const existingSenderRow = existingSender.rows[0] ?? null;
 
-    if (!refreshToken && !existingSender.rows[0]) {
+    if (!refreshToken && !existingSenderRow) {
       res.redirect(`${config.frontendUrl}?auth_error=missing_refresh_token`);
       return;
     }
 
-    if (
-      !refreshToken &&
-      existingSender.rows[0] &&
-      !existingSender.rows[0].scope?.includes("https://www.googleapis.com/auth/gmail.send")
-    ) {
+    let refreshTokenForSending = refreshToken;
+    if (!refreshTokenForSending && existingSenderRow) {
+      try {
+        refreshTokenForSending = decryptSecret(existingSenderRow.refresh_token_encrypted);
+      } catch {
+        res.redirect(`${config.frontendUrl}?auth_error=reconnect_gmail_send_scope`);
+        return;
+      }
+    }
+
+    let refreshTokenCanSend = false;
+    try {
+      refreshTokenCanSend = refreshTokenForSending
+        ? await refreshTokenHasGmailSendScope(refreshTokenForSending)
+        : false;
+    } catch {
       res.redirect(`${config.frontendUrl}?auth_error=reconnect_gmail_send_scope`);
+      return;
+    }
+
+    if (!refreshTokenCanSend) {
+      res.redirect(
+        `${config.frontendUrl}?auth_error=${
+          refreshToken ? "missing_gmail_send_scope" : "reconnect_gmail_send_scope"
+        }`
+      );
       return;
     }
 
     const refreshTokenEncrypted = refreshToken
       ? encryptSecret(refreshToken)
-      : existingSender.rows[0].refresh_token_encrypted;
+      : existingSenderRow!.refresh_token_encrypted;
 
     await query(
       `

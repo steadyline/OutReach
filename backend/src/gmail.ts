@@ -2,12 +2,35 @@ import { google } from "googleapis";
 import { config } from "./config.js";
 import { decryptSecret } from "./crypto.js";
 
+export const gmailSendScope = "https://www.googleapis.com/auth/gmail.send";
+
 export const gmailScopes = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/gmail.send"
+  gmailSendScope
 ];
+
+export function hasGmailSendScope(scopes: string | string[] | null | undefined) {
+  const scopeList = Array.isArray(scopes) ? scopes : scopes?.split(/\s+/) ?? [];
+  return scopeList.includes(gmailSendScope);
+}
+
+export async function refreshTokenHasGmailSendScope(refreshToken: string) {
+  const oauth = createOAuthClient();
+  oauth.setCredentials({ refresh_token: refreshToken });
+
+  const accessTokenResponse = await oauth.getAccessToken();
+  const accessToken =
+    typeof accessTokenResponse === "string" ? accessTokenResponse : accessTokenResponse?.token;
+
+  if (!accessToken) {
+    return false;
+  }
+
+  const tokenInfo = await oauth.getTokenInfo(accessToken);
+  return hasGmailSendScope(tokenInfo.scopes);
+}
 
 export function createOAuthClient() {
   return new google.auth.OAuth2(
@@ -96,4 +119,3 @@ export async function sendGmailMessage(input: GmailSendInput) {
     threadId: response.data.threadId ?? null
   };
 }
-
